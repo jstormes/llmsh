@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <signal.h>
+#include <time.h>
 #include <curl/curl.h>
 
 #include "llm.h"
@@ -113,14 +114,19 @@ static void spinner_stop(void)
 static char *build_system_prompt(const char *cwd, const char *last_output,
                                   const char *matched_cmds, int first_word_is_cmd)
 {
-    size_t sys_len = strlen(SYSTEM_PROMPT) + strlen(cwd) + 512;
+    size_t sys_len = strlen(SYSTEM_PROMPT) + strlen(cwd) + 576;
     if (last_output) sys_len += strlen(last_output);
     if (matched_cmds) sys_len += strlen(matched_cmds) + 256;
 
+    /* Get current date/time */
+    time_t now = time(NULL);
+    char timestr[64];
+    strftime(timestr, sizeof(timestr), "%Y-%m-%d %H:%M:%S %Z", localtime(&now));
+
     char *sys_buf = malloc(sys_len);
     int off = snprintf(sys_buf, sys_len,
-             "%s\n\nCurrent directory: %s\n",
-             SYSTEM_PROMPT, cwd);
+             "%s\n\nCurrent directory: %s\nCurrent time: %s\n",
+             SYSTEM_PROMPT, cwd, timestr);
 
     if (matched_cmds) {
         off += snprintf(sys_buf + off, sys_len - off,
