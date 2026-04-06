@@ -351,6 +351,9 @@ Falls back to environment variables if no `~/.llmshrc` exists.
 | `help` | Show usage help |
 | `exit`, `quit` | Exit the shell |
 
+**Keyboard shortcut:** Press `Shift+Tab` to cycle through configured LLM servers
+without typing a command. The active server and model are shown in the prompt.
+
 ## CLI Flags
 
 | Flag | Description |
