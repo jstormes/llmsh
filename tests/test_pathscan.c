@@ -1,6 +1,10 @@
 #include <stdlib.h>
+#include <signal.h>
 #include "test.h"
 #include "pathscan.h"
+
+/* Required by llm.o */
+volatile sig_atomic_t interrupted = 0;
 
 static void test_init(void)
 {

@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <signal.h>
 #include <curl/curl.h>
 
 #include "llm.h"
@@ -68,10 +69,20 @@ static const char *SYSTEM_PROMPT =
 
 /* ── Spinner ─────────────────────────────────────────────────────── */
 
+extern volatile sig_atomic_t interrupted;
+static void spinner_stop(void);
+
 static int curl_progress_cb(void *clientp, curl_off_t dltotal, curl_off_t dlnow,
                              curl_off_t ultotal, curl_off_t ulnow)
 {
     (void)clientp; (void)dltotal; (void)dlnow; (void)ultotal; (void)ulnow;
+
+    /* Abort curl on Ctrl-C */
+    if (interrupted) {
+        spinner_stop();
+        return 1; /* non-zero aborts the transfer */
+    }
+
     if (g_spinner_active) {
         fprintf(stderr, "\r%s ", spinner_frames[g_spinner_idx % SPINNER_FRAMES]);
         g_spinner_idx++;
