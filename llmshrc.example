@@ -1,0 +1,21 @@
+# llmsh server configuration
+# Copy to ~/.llmshrc
+#
+# Each [section] defines a named server.
+# Switch at runtime with: /server <name>
+# List servers with: /server
+
+[local]
+url = http://ai:8080/v1/chat/completions
+model = llama3
+# key = (none needed for local)
+
+[openai]
+url = https://api.openai.com/v1/chat/completions
+model = gpt-4o
+key = sk-your-key-here
+
+[anthropic]
+url = https://api.anthropic.com/v1/messages
+model = claude-sonnet-4-20250514
+key = sk-ant-your-key-here
