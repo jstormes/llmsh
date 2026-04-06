@@ -22,6 +22,12 @@
 #define LLMSH_SSE_BUF_SIZE    4096
 #define LLMSH_MAX_STREAM_TOOL_CALLS 16
 
+/* Common buffer sizes */
+#define LLMSH_PATH_BUF       4096   /* file paths, cwd */
+#define LLMSH_CMD_BUF        2048   /* shell commands */
+#define LLMSH_LINE_BUF       1024   /* config file lines */
+#define LLMSH_MAX_PIPELINE   64     /* max commands in a pipeline */
+
 /* Prompt */
 #define LLMSH_PROMPT    "llmsh> "
 
