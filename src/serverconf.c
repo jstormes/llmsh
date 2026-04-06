@@ -4,6 +4,7 @@
 
 #include "serverconf.h"
 #include "config.h"
+#include "streams.h"
 
 /* Strip leading/trailing whitespace in place */
 static char *strip(char *s)
@@ -135,10 +136,12 @@ int serverconf_switch(server_config_t *conf, const char *name)
 void serverconf_list(const server_config_t *conf)
 {
     for (int i = 0; i < conf->count; i++) {
-        printf("%s %s (%s @ %s)\n",
-               i == conf->active ? "*" : " ",
-               conf->servers[i].name,
-               conf->servers[i].model ? conf->servers[i].model : "default",
-               conf->servers[i].api_url ? conf->servers[i].api_url : "(none)");
+        char line[512];
+        snprintf(line, sizeof(line), "%s %s (%s @ %s)\n",
+                 i == conf->active ? "*" : " ",
+                 conf->servers[i].name,
+                 conf->servers[i].model ? conf->servers[i].model : "default",
+                 conf->servers[i].api_url ? conf->servers[i].api_url : "(none)");
+        stream_chat_output(line);
     }
 }

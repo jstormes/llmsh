@@ -54,49 +54,12 @@ static const char *SYSTEM_PROMPT =
     "- Be concise in text responses. Show results, not explanations.\n"
     "- For destructive operations, the safety system will handle confirmation.";
 
-/* curl write callback */
-struct curl_buf {
-    char *data;
-    size_t size;
-};
+/* ── Shared helpers ──────────────────────────────────────────────── */
 
-static size_t curl_write_cb(void *ptr, size_t size, size_t nmemb, void *userdata)
+/* Build the system prompt with context */
+static char *build_system_prompt(const char *cwd, const char *last_output,
+                                  const char *matched_cmds, int first_word_is_cmd)
 {
-    struct curl_buf *buf = userdata;
-    size_t total = size * nmemb;
-    char *tmp = realloc(buf->data, buf->size + total + 1);
-    if (!tmp) return 0;
-    buf->data = tmp;
-    memcpy(buf->data + buf->size, ptr, total);
-    buf->size += total;
-    buf->data[buf->size] = '\0';
-    return total;
-}
-
-int llm_init(const char *api_url, const char *model, const char *api_key)
-{
-    curl_global_init(CURL_GLOBAL_DEFAULT);
-    g_api_url = strdup(api_url);
-    g_model   = strdup(model);
-    g_api_key = api_key ? strdup(api_key) : NULL;
-    return 0;
-}
-
-void llm_cleanup(void)
-{
-    free(g_api_url);
-    free(g_model);
-    free(g_api_key);
-    curl_global_cleanup();
-}
-
-llm_response_t *llm_chat(const char *user_input, const char *cwd,
-                          const char *last_output,
-                          const char *matched_cmds, int first_word_is_cmd)
-{
-    (void)user_input; /* already in history */
-
-    /* Build context-aware system prompt */
     size_t sys_len = strlen(SYSTEM_PROMPT) + strlen(cwd) + 512;
     if (last_output) sys_len += strlen(last_output);
     if (matched_cmds) sys_len += strlen(matched_cmds) + 256;
@@ -122,48 +85,144 @@ llm_response_t *llm_chat(const char *user_input, const char *cwd,
                  "\nLast command output (truncated):\n%s\n", last_output);
     }
 
-    /* Build messages array using history */
-    char *messages_json = history_build_messages(sys_buf);
-    free(sys_buf);
-    if (!messages_json)
-        return NULL;
+    return sys_buf;
+}
 
-    /* Build request body */
+/* Build the JSON request body. Caller frees returned string. */
+static char *build_request_body(const char *sys_prompt, int streaming)
+{
+    char *messages_json = history_build_messages(sys_prompt);
+    if (!messages_json) return NULL;
+
     cJSON *req = cJSON_CreateObject();
     cJSON_AddStringToObject(req, "model", g_model);
 
-    /* Parse and add messages */
     cJSON *msgs = cJSON_Parse(messages_json);
     free(messages_json);
-    if (msgs)
-        cJSON_AddItemToObject(req, "messages", msgs);
+    if (msgs) cJSON_AddItemToObject(req, "messages", msgs);
 
-    /* Parse and add tools */
     cJSON *tools = cJSON_Parse(TOOLS_JSON);
-    if (tools)
-        cJSON_AddItemToObject(req, "tools", tools);
+    if (tools) cJSON_AddItemToObject(req, "tools", tools);
 
     cJSON_AddNumberToObject(req, "max_tokens", LLMSH_MAX_TOKENS);
 
+    if (streaming)
+        cJSON_AddBoolToObject(req, "stream", 1);
+
     char *body = cJSON_PrintUnformatted(req);
     cJSON_Delete(req);
+    return body;
+}
 
-    /* HTTP request */
-    CURL *curl = curl_easy_init();
-    if (!curl) {
-        free(body);
-        return NULL;
-    }
-
-    struct curl_buf response = {NULL, 0};
+/* Build curl headers. Caller frees with curl_slist_free_all. */
+static struct curl_slist *build_headers(void)
+{
     struct curl_slist *headers = NULL;
     headers = curl_slist_append(headers, "Content-Type: application/json");
-
     if (g_api_key) {
         char auth[512];
         snprintf(auth, sizeof(auth), "Authorization: Bearer %s", g_api_key);
         headers = curl_slist_append(headers, auth);
     }
+    return headers;
+}
+
+/* ── Non-streaming (original) ────────────────────────────────────── */
+
+struct curl_buf {
+    char *data;
+    size_t size;
+};
+
+static size_t curl_write_cb(void *ptr, size_t size, size_t nmemb, void *userdata)
+{
+    struct curl_buf *buf = userdata;
+    size_t total = size * nmemb;
+    char *tmp = realloc(buf->data, buf->size + total + 1);
+    if (!tmp) return 0;
+    buf->data = tmp;
+    memcpy(buf->data + buf->size, ptr, total);
+    buf->size += total;
+    buf->data[buf->size] = '\0';
+    return total;
+}
+
+static llm_response_t *parse_full_response(const char *json_str)
+{
+    cJSON *json = cJSON_Parse(json_str);
+    if (!json) {
+        fprintf(stderr, "llmsh: failed to parse LLM response\n");
+        return NULL;
+    }
+
+    llm_response_t *result = calloc(1, sizeof(*result));
+
+    cJSON *choices = cJSON_GetObjectItem(json, "choices");
+    cJSON *choice0 = cJSON_GetArrayItem(choices, 0);
+    cJSON *message = choice0 ? cJSON_GetObjectItem(choice0, "message") : NULL;
+
+    if (message) {
+        cJSON *content = cJSON_GetObjectItem(message, "content");
+        if (content && cJSON_IsString(content) && content->valuestring[0])
+            result->text = strdup(content->valuestring);
+
+        cJSON *tcs = cJSON_GetObjectItem(message, "tool_calls");
+        if (tcs && cJSON_IsArray(tcs)) {
+            int n = cJSON_GetArraySize(tcs);
+            result->tool_calls = calloc(n, sizeof(tool_call_t));
+            result->num_tool_calls = n;
+            for (int i = 0; i < n; i++) {
+                cJSON *tc = cJSON_GetArrayItem(tcs, i);
+                cJSON *fn = cJSON_GetObjectItem(tc, "function");
+                if (fn) {
+                    cJSON *name = cJSON_GetObjectItem(fn, "name");
+                    cJSON *args = cJSON_GetObjectItem(fn, "arguments");
+                    if (name && cJSON_IsString(name))
+                        result->tool_calls[i].name = strdup(name->valuestring);
+                    if (args && cJSON_IsString(args))
+                        result->tool_calls[i].arguments = strdup(args->valuestring);
+                }
+            }
+        }
+    }
+
+    cJSON_Delete(json);
+    return result;
+}
+
+int llm_init(const char *api_url, const char *model, const char *api_key)
+{
+    curl_global_init(CURL_GLOBAL_DEFAULT);
+    g_api_url = strdup(api_url);
+    g_model   = strdup(model);
+    g_api_key = api_key ? strdup(api_key) : NULL;
+    return 0;
+}
+
+void llm_cleanup(void)
+{
+    free(g_api_url);
+    free(g_model);
+    free(g_api_key);
+    curl_global_cleanup();
+}
+
+llm_response_t *llm_chat(const char *user_input, const char *cwd,
+                          const char *last_output,
+                          const char *matched_cmds, int first_word_is_cmd)
+{
+    (void)user_input;
+
+    char *sys_prompt = build_system_prompt(cwd, last_output, matched_cmds, first_word_is_cmd);
+    char *body = build_request_body(sys_prompt, 0);
+    free(sys_prompt);
+    if (!body) return NULL;
+
+    CURL *curl = curl_easy_init();
+    if (!curl) { free(body); return NULL; }
+
+    struct curl_buf response = {NULL, 0};
+    struct curl_slist *headers = build_headers();
 
     curl_easy_setopt(curl, CURLOPT_URL, g_api_url);
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
@@ -183,50 +242,254 @@ llm_response_t *llm_chat(const char *user_input, const char *cwd,
         return NULL;
     }
 
-    /* Parse response */
-    cJSON *json = cJSON_Parse(response.data);
+    llm_response_t *result = parse_full_response(response.data);
     free(response.data);
-    if (!json) {
-        fprintf(stderr, "llmsh: failed to parse LLM response\n");
-        return NULL;
+    return result;
+}
+
+/* ── SSE Streaming ───────────────────────────────────────────────── */
+
+typedef struct {
+    /* Line buffer for accumulating partial SSE lines */
+    char *line_buf;
+    size_t line_len;
+    size_t line_cap;
+
+    /* Accumulated full text */
+    char *full_text;
+    size_t text_len;
+    size_t text_cap;
+
+    /* Tool call accumulation (streamed as indexed fragments) */
+    tool_call_t tool_calls[LLMSH_MAX_STREAM_TOOL_CALLS];
+    /* Argument buffers (accumulated across chunks) */
+    char *tc_args[LLMSH_MAX_STREAM_TOOL_CALLS];
+    size_t tc_args_len[LLMSH_MAX_STREAM_TOOL_CALLS];
+    size_t tc_args_cap[LLMSH_MAX_STREAM_TOOL_CALLS];
+    int num_tool_calls;
+
+    /* Callback */
+    llm_token_cb token_cb;
+    void *userdata;
+} sse_state_t;
+
+static void sse_state_init(sse_state_t *st, llm_token_cb cb, void *ud)
+{
+    memset(st, 0, sizeof(*st));
+    st->token_cb = cb;
+    st->userdata = ud;
+}
+
+static void sse_state_cleanup(sse_state_t *st)
+{
+    free(st->line_buf);
+    /* full_text and tool_calls are transferred to response, don't free here */
+}
+
+static void sse_append_text(sse_state_t *st, const char *s, size_t len)
+{
+    if (st->text_len + len + 1 > st->text_cap) {
+        st->text_cap = (st->text_cap == 0) ? 1024 : st->text_cap * 2;
+        while (st->text_len + len + 1 > st->text_cap)
+            st->text_cap *= 2;
+        st->full_text = realloc(st->full_text, st->text_cap);
     }
+    memcpy(st->full_text + st->text_len, s, len);
+    st->text_len += len;
+    st->full_text[st->text_len] = '\0';
+}
 
-    llm_response_t *result = calloc(1, sizeof(*result));
+static void sse_append_tc_args(sse_state_t *st, int idx, const char *s, size_t len)
+{
+    if (idx < 0 || idx >= LLMSH_MAX_STREAM_TOOL_CALLS) return;
+    size_t *al = &st->tc_args_len[idx];
+    size_t *ac = &st->tc_args_cap[idx];
+    if (*al + len + 1 > *ac) {
+        *ac = (*ac == 0) ? 256 : *ac * 2;
+        while (*al + len + 1 > *ac) *ac *= 2;
+        st->tc_args[idx] = realloc(st->tc_args[idx], *ac);
+    }
+    memcpy(st->tc_args[idx] + *al, s, len);
+    *al += len;
+    st->tc_args[idx][*al] = '\0';
+}
 
-    /* Extract from choices[0].message */
+/* Process a single SSE data line (everything after "data: ") */
+static void sse_process_data(sse_state_t *st, const char *data)
+{
+    /* End of stream */
+    if (strcmp(data, "[DONE]") == 0)
+        return;
+
+    cJSON *json = cJSON_Parse(data);
+    if (!json) return;
+
     cJSON *choices = cJSON_GetObjectItem(json, "choices");
     cJSON *choice0 = cJSON_GetArrayItem(choices, 0);
-    cJSON *message = choice0 ? cJSON_GetObjectItem(choice0, "message") : NULL;
+    cJSON *delta = choice0 ? cJSON_GetObjectItem(choice0, "delta") : NULL;
 
-    if (message) {
-        /* Text content */
-        cJSON *content = cJSON_GetObjectItem(message, "content");
-        if (content && cJSON_IsString(content) && content->valuestring[0])
-            result->text = strdup(content->valuestring);
+    if (delta) {
+        /* Text content delta */
+        cJSON *content = cJSON_GetObjectItem(delta, "content");
+        if (content && cJSON_IsString(content) && content->valuestring[0]) {
+            const char *tok = content->valuestring;
+            size_t toklen = strlen(tok);
+            sse_append_text(st, tok, toklen);
+            if (st->token_cb)
+                st->token_cb(tok, st->userdata);
+        }
 
-        /* Tool calls */
-        cJSON *tcs = cJSON_GetObjectItem(message, "tool_calls");
+        /* Tool call deltas */
+        cJSON *tcs = cJSON_GetObjectItem(delta, "tool_calls");
         if (tcs && cJSON_IsArray(tcs)) {
             int n = cJSON_GetArraySize(tcs);
-            result->tool_calls = calloc(n, sizeof(tool_call_t));
-            result->num_tool_calls = n;
-
             for (int i = 0; i < n; i++) {
                 cJSON *tc = cJSON_GetArrayItem(tcs, i);
+
+                /* Get index */
+                cJSON *idx_j = cJSON_GetObjectItem(tc, "index");
+                int idx = idx_j ? idx_j->valueint : st->num_tool_calls;
+                if (idx >= LLMSH_MAX_STREAM_TOOL_CALLS) continue;
+
+                /* Track how many tool calls we have */
+                if (idx >= st->num_tool_calls)
+                    st->num_tool_calls = idx + 1;
+
+                /* Function name (first chunk for this tool call) */
                 cJSON *fn = cJSON_GetObjectItem(tc, "function");
                 if (fn) {
                     cJSON *name = cJSON_GetObjectItem(fn, "name");
+                    if (name && cJSON_IsString(name) && !st->tool_calls[idx].name)
+                        st->tool_calls[idx].name = strdup(name->valuestring);
+
+                    /* Arguments fragment */
                     cJSON *args = cJSON_GetObjectItem(fn, "arguments");
-                    if (name && cJSON_IsString(name))
-                        result->tool_calls[i].name = strdup(name->valuestring);
-                    if (args && cJSON_IsString(args))
-                        result->tool_calls[i].arguments = strdup(args->valuestring);
+                    if (args && cJSON_IsString(args)) {
+                        size_t alen = strlen(args->valuestring);
+                        if (alen > 0)
+                            sse_append_tc_args(st, idx, args->valuestring, alen);
+                    }
                 }
             }
         }
     }
 
     cJSON_Delete(json);
+}
+
+/* Process buffered data, splitting on newlines and handling SSE lines */
+static void sse_process_buffer(sse_state_t *st)
+{
+    size_t start = 0;
+    for (size_t i = 0; i < st->line_len; i++) {
+        if (st->line_buf[i] == '\n') {
+            st->line_buf[i] = '\0';
+            char *line = st->line_buf + start;
+
+            /* Skip empty lines (SSE keepalives) */
+            if (line[0] != '\0') {
+                if (strncmp(line, "data: ", 6) == 0)
+                    sse_process_data(st, line + 6);
+                else if (strncmp(line, "data:", 5) == 0)
+                    sse_process_data(st, line + 5);
+                /* Ignore other SSE fields (event:, id:, retry:) */
+            }
+
+            start = i + 1;
+        }
+    }
+
+    /* Keep unprocessed bytes (incomplete line) */
+    if (start > 0 && start < st->line_len) {
+        memmove(st->line_buf, st->line_buf + start, st->line_len - start);
+        st->line_len -= start;
+    } else if (start == st->line_len) {
+        st->line_len = 0;
+    }
+}
+
+static size_t curl_sse_write_cb(void *ptr, size_t size, size_t nmemb, void *userdata)
+{
+    sse_state_t *st = userdata;
+    size_t total = size * nmemb;
+
+    /* Append to line buffer */
+    if (st->line_len + total + 1 > st->line_cap) {
+        st->line_cap = (st->line_cap == 0) ? LLMSH_SSE_BUF_SIZE : st->line_cap * 2;
+        while (st->line_len + total + 1 > st->line_cap)
+            st->line_cap *= 2;
+        st->line_buf = realloc(st->line_buf, st->line_cap);
+    }
+    memcpy(st->line_buf + st->line_len, ptr, total);
+    st->line_len += total;
+    st->line_buf[st->line_len] = '\0';
+
+    /* Process complete lines */
+    sse_process_buffer(st);
+
+    return total;
+}
+
+llm_response_t *llm_chat_stream(const char *user_input, const char *cwd,
+                                 const char *last_output,
+                                 const char *matched_cmds, int first_word_is_cmd,
+                                 llm_token_cb token_cb, void *userdata)
+{
+    /* Fall back to non-streaming if no callback */
+    if (!token_cb)
+        return llm_chat(user_input, cwd, last_output, matched_cmds, first_word_is_cmd);
+
+    (void)user_input;
+
+    char *sys_prompt = build_system_prompt(cwd, last_output, matched_cmds, first_word_is_cmd);
+    char *body = build_request_body(sys_prompt, 1);
+    free(sys_prompt);
+    if (!body) return NULL;
+
+    CURL *curl = curl_easy_init();
+    if (!curl) { free(body); return NULL; }
+
+    sse_state_t sse;
+    sse_state_init(&sse, token_cb, userdata);
+
+    struct curl_slist *headers = build_headers();
+
+    curl_easy_setopt(curl, CURLOPT_URL, g_api_url);
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_sse_write_cb);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &sse);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 300L); /* longer timeout for streaming */
+
+    CURLcode res = curl_easy_perform(curl);
+    curl_slist_free_all(headers);
+    curl_easy_cleanup(curl);
+    free(body);
+
+    if (res != CURLE_OK) {
+        fprintf(stderr, "llmsh: curl error: %s\n", curl_easy_strerror(res));
+        sse_state_cleanup(&sse);
+        return NULL;
+    }
+
+    /* Build response from accumulated state */
+    llm_response_t *result = calloc(1, sizeof(*result));
+
+    if (sse.full_text && sse.text_len > 0)
+        result->text = sse.full_text;  /* transfer ownership */
+    else
+        free(sse.full_text);
+
+    if (sse.num_tool_calls > 0) {
+        result->num_tool_calls = sse.num_tool_calls;
+        result->tool_calls = calloc(sse.num_tool_calls, sizeof(tool_call_t));
+        for (int i = 0; i < sse.num_tool_calls; i++) {
+            result->tool_calls[i].name = sse.tool_calls[i].name; /* transfer */
+            result->tool_calls[i].arguments = sse.tc_args[i];    /* transfer */
+        }
+    }
+
+    sse_state_cleanup(&sse);
     return result;
 }
 

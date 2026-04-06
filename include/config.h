@@ -18,6 +18,10 @@
 /* Agentic loop */
 #define LLMSH_MAX_ITERATIONS  20   /* max tool-call rounds per user input */
 
+/* SSE streaming */
+#define LLMSH_SSE_BUF_SIZE    4096
+#define LLMSH_MAX_STREAM_TOOL_CALLS 16
+
 /* Prompt */
 #define LLMSH_PROMPT    "llmsh> "
 

@@ -17,14 +17,26 @@ typedef struct {
 int  llm_init(const char *api_url, const char *model, const char *api_key);
 void llm_cleanup(void);
 
+/* Callback invoked for each text token during streaming */
+typedef void (*llm_token_cb)(const char *token, void *userdata);
+
 /*
- * Send user input to the LLM.
- * matched_cmds: comma-separated list of PATH commands found in user input (or NULL)
- * first_word_is_cmd: 1 if the first word of input is a known command
+ * Send user input to the LLM (blocking, non-streaming).
  */
 llm_response_t *llm_chat(const char *user_input, const char *cwd,
                           const char *last_output,
                           const char *matched_cmds, int first_word_is_cmd);
+
+/*
+ * Send user input to the LLM with SSE streaming.
+ * token_cb is called for each text delta as it arrives.
+ * Falls back to non-streaming if token_cb is NULL.
+ */
+llm_response_t *llm_chat_stream(const char *user_input, const char *cwd,
+                                 const char *last_output,
+                                 const char *matched_cmds, int first_word_is_cmd,
+                                 llm_token_cb token_cb, void *userdata);
+
 void llm_response_free(llm_response_t *resp);
 
 #endif /* LLMSH_LLM_H */
