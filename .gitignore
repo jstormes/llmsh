@@ -1,0 +1,7 @@
+*.o
+llmsh
+*.swp
+*.swo
+*~
+.vscode/
+.idea/

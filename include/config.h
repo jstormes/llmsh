@@ -1,0 +1,21 @@
+#ifndef LLMSH_CONFIG_H
+#define LLMSH_CONFIG_H
+
+/* LLM API configuration */
+#define LLMSH_DEFAULT_API_URL    "http://localhost:8080/v1/chat/completions"
+#define LLMSH_DEFAULT_MODEL      "default"
+#define LLMSH_MAX_TOKENS         4096
+
+/* History / context */
+#define LLMSH_MAX_HISTORY        20
+#define LLMSH_MAX_OUTPUT_CAPTURE  8192
+
+/* Safety tiers */
+#define SAFETY_AUTO     0   /* read-only: ls, cat, pwd, wc, head, grep */
+#define SAFETY_CONFIRM  1   /* writes: cp, mv, write, mkdir */
+#define SAFETY_DANGER   2   /* destructive: rm, run (arbitrary exec) */
+
+/* Prompt */
+#define LLMSH_PROMPT    "llmsh> "
+
+#endif /* LLMSH_CONFIG_H */
