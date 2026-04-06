@@ -15,6 +15,9 @@
 #define SAFETY_CONFIRM  1   /* writes: cp, mv, write, mkdir */
 #define SAFETY_DANGER   2   /* destructive: rm, run (arbitrary exec) */
 
+/* Agentic loop */
+#define LLMSH_MAX_ITERATIONS  20   /* max tool-call rounds per user input */
+
 /* Prompt */
 #define LLMSH_PROMPT    "llmsh> "
 

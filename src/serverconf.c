@@ -27,35 +27,54 @@ server_config_t *serverconf_load(void)
     else
         snprintf(path, sizeof(path), ".llmshrc");
 
+    /* Defaults for global settings */
+    conf->max_iterations = LLMSH_MAX_ITERATIONS;
+
     FILE *f = fopen(path, "r");
     if (f) {
         char line[1024];
         int cur = -1;
+        int in_settings = 0;
 
         while (fgets(line, sizeof(line), f)) {
             char *s = strip(line);
             if (s[0] == '#' || s[0] == '\0')
                 continue;
 
-            /* [section] starts a new server */
+            /* [section] starts a new server or settings */
             if (s[0] == '[') {
                 char *end = strchr(s, ']');
-                if (end && conf->count < LLMSH_MAX_SERVERS) {
+                if (end) {
                     *end = '\0';
-                    cur = conf->count++;
-                    conf->servers[cur].name = strdup(s + 1);
+                    if (strcmp(s + 1, "settings") == 0) {
+                        in_settings = 1;
+                        cur = -1;
+                        continue;
+                    }
+                    in_settings = 0;
+                    if (conf->count < LLMSH_MAX_SERVERS) {
+                        cur = conf->count++;
+                        conf->servers[cur].name = strdup(s + 1);
+                    }
                 }
                 continue;
             }
 
             /* key = value */
-            if (cur < 0) continue;
             char *eq = strchr(s, '=');
             if (!eq) continue;
 
             *eq = '\0';
             char *key = strip(s);
             char *val = strip(eq + 1);
+
+            if (in_settings) {
+                if (strcmp(key, "max_iterations") == 0)
+                    conf->max_iterations = atoi(val);
+                continue;
+            }
+
+            if (cur < 0) continue;
 
             if (strcmp(key, "url") == 0)
                 conf->servers[cur].api_url = strdup(val);

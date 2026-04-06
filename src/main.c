@@ -201,11 +201,25 @@ int main(int argc, char **argv)
             continue;
         }
 
-        /* Handle tool calls */
-        free(last_output);
-        last_output = NULL;
+        /* Agentic loop: keep going while the LLM makes tool calls */
+        int max_iter = g_servers->max_iterations;
+        int iterations = 0;
+        while (resp && resp->num_tool_calls > 0
+               && !interrupted
+               && iterations < max_iter) {
 
-        if (resp->num_tool_calls > 0) {
+            iterations++;
+
+            /* Print assistant text before tool calls if any */
+            if (resp->text && resp->text[0]) {
+                printf("%s\n", resp->text);
+                history_add_assistant(resp->text);
+            }
+
+            /* Execute all tool calls */
+            free(last_output);
+            last_output = NULL;
+
             for (int i = 0; i < resp->num_tool_calls && !interrupted; i++) {
                 char *result = router_dispatch(&resp->tool_calls[i]);
                 if (result) {
@@ -215,18 +229,29 @@ int main(int argc, char **argv)
 
                     history_add_tool_result(resp->tool_calls[i].name, result);
 
-                    /* Keep last output for context */
                     free(last_output);
                     last_output = result;
                 }
             }
+
+            llm_response_free(resp);
+
+            if (interrupted) break;
+
+            /* Send results back to LLM for next round */
+            if (!getcwd(cwd, sizeof(cwd)))
+                strcpy(cwd, ".");
+            resp = llm_chat(NULL, cwd, last_output, NULL, 0);
         }
 
-        /* Print assistant text if any */
-        if (resp->text && resp->text[0]) {
+        /* Print final assistant text */
+        if (resp && resp->text && resp->text[0]) {
             printf("%s\n", resp->text);
             history_add_assistant(resp->text);
         }
+
+        if (iterations >= max_iter)
+            fprintf(stderr, "llmsh: max iterations reached (%d)\n", max_iter);
 
         llm_response_free(resp);
     }

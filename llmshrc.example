@@ -1,9 +1,13 @@
-# llmsh server configuration
+# llmsh configuration
 # Copy to ~/.llmshrc
 #
-# Each [section] defines a named server.
+# [settings] section for global options.
+# Each other [section] defines a named server.
 # Switch at runtime with: /server <name>
 # List servers with: /server
+
+[settings]
+max_iterations = 20    # max tool-call rounds per user input (default: 20)
 
 [local]
 url = http://ai:8080/v1/chat/completions

@@ -14,6 +14,9 @@ typedef struct {
     server_entry_t servers[LLMSH_MAX_SERVERS];
     int count;
     int active;     /* index of active server */
+
+    /* Global settings from [settings] section */
+    int max_iterations;
 } server_config_t;
 
 /* Load config from ~/.llmshrc. Falls back to env vars. */

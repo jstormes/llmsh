@@ -87,9 +87,33 @@ default@~> curl example.com                # safe → runs immediately
 default@~> curl example.com > out.txt      # file redirect → asks for confirmation
 ```
 
-## Multi-Server Configuration
+## Agentic Loop
 
-Configure multiple LLM backends in `~/.llmshrc`:
+llmsh uses an agentic loop for multi-step tasks. When the LLM needs to make
+multiple tool calls to complete a request (e.g., "review the code in this directory"),
+it will keep calling tools and feeding results back until it has a final answer.
+
+The loop stops when:
+- The LLM responds with only text (no more tool calls)
+- Ctrl-C interrupts
+- The max iterations limit is reached (default: 20)
+
+## Configuration
+
+All configuration lives in `~/.llmshrc` (INI format).
+
+### Global Settings
+
+The `[settings]` section controls shell behavior:
+
+```ini
+[settings]
+max_iterations = 20    # max tool-call rounds per user input (default: 20)
+```
+
+### Server Definitions
+
+Each other `[section]` defines a named LLM server:
 
 ```ini
 [local]
@@ -109,7 +133,7 @@ default@~> /server           # list all servers
 default@~> /server openai    # switch to openai
 ```
 
-Falls back to environment variables if no config file exists.
+Falls back to environment variables if no `~/.llmshrc` exists.
 
 ## Shell Commands
 
