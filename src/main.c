@@ -21,6 +21,7 @@
 
 static volatile sig_atomic_t interrupted = 0;
 static server_config_t *g_servers = NULL;
+static char *g_last_output = NULL;
 
 static void sigint_handler(int sig)
 {
@@ -164,9 +165,11 @@ static int shift_tab_handler(int count, int key)
     snprintf(msg, sizeof(msg), "\n→ %s (%s)\n", s->name, s->model);
     stream_chat_output(msg);
 
-    /* Clear conversation history on switch */
+    /* Clear conversation history and last output on switch */
     history_cleanup();
     history_init();
+    free(g_last_output);
+    g_last_output = NULL;
 
     rl_on_new_line();
     rl_replace_line("", 0);
@@ -265,9 +268,11 @@ static int handle_server_cmd(const char *line)
         stream_chat_output(msg);
     }
 
-    /* Clear conversation history on server switch */
+    /* Clear conversation history and last output on server switch */
     history_cleanup();
     history_init();
+    free(g_last_output);
+    g_last_output = NULL;
 
     return 1;
 }
@@ -354,7 +359,6 @@ int main(int argc, char **argv)
     }
 
     char cwd[4096];
-    char *last_output = NULL;
 
     /* One-shot mode: remaining args are the query */
     if (optind < argc) {
@@ -402,8 +406,8 @@ int main(int argc, char **argv)
                     stream_chat_output("\n"); /* text already streamed */
                     history_add_assistant(resp->text);
                 }
-                free(last_output);
-                last_output = NULL;
+                free(g_last_output);
+                g_last_output = NULL;
                 for (int i = 0; i < resp->num_tool_calls && !interrupted; i++) {
                     char *result = router_dispatch(&resp->tool_calls[i]);
                     if (result) {
@@ -411,14 +415,14 @@ int main(int argc, char **argv)
                         if (result[0] && result[strlen(result)-1] != '\n')
                             stream_tool_output("\n");
                         history_add_tool_result(resp->tool_calls[i].name, result);
-                        free(last_output);
-                        last_output = result;
+                        free(g_last_output);
+                        g_last_output = result;
                     }
                 }
                 llm_response_free(resp);
                 if (interrupted) break;
                 if (!getcwd(cwd, sizeof(cwd))) strcpy(cwd, ".");
-                resp = llm_chat_stream(NULL, cwd, last_output, NULL, 0,
+                resp = llm_chat_stream(NULL, cwd, g_last_output, NULL, 0,
                                        &g_stream_cbs);
             }
             if (resp && resp->text && resp->text[0]) {
@@ -427,7 +431,7 @@ int main(int argc, char **argv)
             }
             streams_llm_active = 0;
             llm_response_free(resp);
-            free(last_output);
+            free(g_last_output);
             write_history(histfile);
             history_cleanup();
             llm_cleanup();
@@ -458,8 +462,8 @@ int main(int argc, char **argv)
                 history_add_assistant(resp->text);
             }
 
-            free(last_output);
-            last_output = NULL;
+            free(g_last_output);
+            g_last_output = NULL;
 
             for (int i = 0; i < resp->num_tool_calls && !interrupted; i++) {
                 char *result = router_dispatch(&resp->tool_calls[i]);
@@ -468,8 +472,8 @@ int main(int argc, char **argv)
                     if (result[0] && result[strlen(result)-1] != '\n')
                         stream_tool_output("\n");
                     history_add_tool_result(resp->tool_calls[i].name, result);
-                    free(last_output);
-                    last_output = result;
+                    free(g_last_output);
+                    g_last_output = result;
                 }
             }
 
@@ -478,7 +482,7 @@ int main(int argc, char **argv)
 
             if (!getcwd(cwd, sizeof(cwd)))
                 strcpy(cwd, ".");
-            resp = llm_chat_stream(NULL, cwd, last_output, NULL, 0,
+            resp = llm_chat_stream(NULL, cwd, g_last_output, NULL, 0,
                                    &g_stream_cbs);
         }
 
@@ -491,7 +495,7 @@ int main(int argc, char **argv)
         }
 
         llm_response_free(resp);
-        free(last_output);
+        free(g_last_output);
         write_history(histfile);
         history_cleanup();
         llm_cleanup();
@@ -622,7 +626,7 @@ int main(int argc, char **argv)
 
                 history_add_user(full_query);
                 streams_llm_active = 1;
-                llm_response_t *resp = llm_chat_stream(full_query, cwd, last_output,
+                llm_response_t *resp = llm_chat_stream(full_query, cwd, g_last_output,
                                                  mc, fw, &g_stream_cbs);
                 free(full_query);
                 free(mc);
@@ -645,8 +649,8 @@ int main(int argc, char **argv)
                         stream_chat_output("\n");
                         history_add_assistant(resp->text);
                     }
-                    free(last_output);
-                    last_output = NULL;
+                    free(g_last_output);
+                    g_last_output = NULL;
                     for (int i = 0; i < resp->num_tool_calls && !interrupted; i++) {
                         char *result = router_dispatch(&resp->tool_calls[i]);
                         if (result) {
@@ -654,14 +658,14 @@ int main(int argc, char **argv)
                             if (result[0] && result[strlen(result)-1] != '\n')
                                 stream_tool_output("\n");
                             history_add_tool_result(resp->tool_calls[i].name, result);
-                            free(last_output);
-                            last_output = result;
+                            free(g_last_output);
+                            g_last_output = result;
                         }
                     }
                     llm_response_free(resp);
                     if (interrupted) break;
                     if (!getcwd(cwd, sizeof(cwd))) strcpy(cwd, ".");
-                    resp = llm_chat_stream(NULL, cwd, last_output, NULL, 0,
+                    resp = llm_chat_stream(NULL, cwd, g_last_output, NULL, 0,
                                            &g_stream_cbs);
                 }
                 streams_llm_active = 0;
@@ -671,9 +675,9 @@ int main(int argc, char **argv)
                 }
                 llm_response_free(resp);
             } else {
-                /* Fully executed, update last_output */
-                free(last_output);
-                last_output = pipe_context;
+                /* Fully executed, update g_last_output */
+                free(g_last_output);
+                g_last_output = pipe_context;
                 free(llm_prompt);
             }
             free(line);
@@ -683,7 +687,7 @@ int main(int argc, char **argv)
         /* Pure natural language — send to LLM */
         history_add_user(line);
         streams_llm_active = 1;
-        llm_response_t *resp = llm_chat_stream(line, cwd, last_output,
+        llm_response_t *resp = llm_chat_stream(line, cwd, g_last_output,
                                          matched_cmds, 0,
                                          &g_stream_cbs);
         free(line);
@@ -711,8 +715,8 @@ int main(int argc, char **argv)
             }
 
             /* Execute all tool calls */
-            free(last_output);
-            last_output = NULL;
+            free(g_last_output);
+            g_last_output = NULL;
 
             for (int i = 0; i < resp->num_tool_calls && !interrupted; i++) {
                 char *result = router_dispatch(&resp->tool_calls[i]);
@@ -723,8 +727,8 @@ int main(int argc, char **argv)
 
                     history_add_tool_result(resp->tool_calls[i].name, result);
 
-                    free(last_output);
-                    last_output = result;
+                    free(g_last_output);
+                    g_last_output = result;
                 }
             }
 
@@ -735,7 +739,7 @@ int main(int argc, char **argv)
             /* Send results back to LLM for next round */
             if (!getcwd(cwd, sizeof(cwd)))
                 strcpy(cwd, ".");
-            resp = llm_chat_stream(NULL, cwd, last_output, NULL, 0,
+            resp = llm_chat_stream(NULL, cwd, g_last_output, NULL, 0,
                                    &g_stream_cbs);
         }
 
@@ -753,7 +757,7 @@ int main(int argc, char **argv)
         llm_response_free(resp);
     }
 
-    free(last_output);
+    free(g_last_output);
     free(piped_input);
     write_history(histfile);
     history_cleanup();

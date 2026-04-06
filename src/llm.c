@@ -229,9 +229,17 @@ static llm_response_t *parse_full_response(const char *json_str)
     return result;
 }
 
+static int g_curl_initialized = 0;
+
 int llm_init(const char *api_url, const char *model, const char *api_key)
 {
-    curl_global_init(CURL_GLOBAL_DEFAULT);
+    if (!g_curl_initialized) {
+        curl_global_init(CURL_GLOBAL_DEFAULT);
+        g_curl_initialized = 1;
+    }
+    free(g_api_url);
+    free(g_model);
+    free(g_api_key);
     g_api_url = strdup(api_url);
     g_model   = strdup(model);
     g_api_key = api_key ? strdup(api_key) : NULL;
@@ -240,10 +248,13 @@ int llm_init(const char *api_url, const char *model, const char *api_key)
 
 void llm_cleanup(void)
 {
-    free(g_api_url);
-    free(g_model);
-    free(g_api_key);
-    curl_global_cleanup();
+    free(g_api_url);  g_api_url = NULL;
+    free(g_model);    g_model = NULL;
+    free(g_api_key);  g_api_key = NULL;
+    if (g_curl_initialized) {
+        curl_global_cleanup();
+        g_curl_initialized = 0;
+    }
 }
 
 llm_response_t *llm_chat(const char *user_input, const char *cwd,
