@@ -345,6 +345,7 @@ int main(int argc, char **argv)
                      "[stdin content]:\n%s\n\n[user request]: %s",
                      piped_input, query);
             history_add_user(full_query);
+            streams_llm_active = 1;
             llm_response_t *resp = llm_chat_stream(full_query, cwd, NULL,
                                              matched_cmds, first_word_is_cmd,
                                              &g_stream_cbs);
@@ -386,6 +387,7 @@ int main(int argc, char **argv)
                 stream_chat_output("\n"); /* text already streamed */
                 history_add_assistant(resp->text);
             }
+            streams_llm_active = 0;
             llm_response_free(resp);
             free(last_output);
             write_history(histfile);
@@ -399,6 +401,7 @@ int main(int argc, char **argv)
         }
 
         history_add_user(query);
+        streams_llm_active = 1;
         llm_response_t *resp = llm_chat_stream(query, cwd, NULL,
                                          matched_cmds, first_word_is_cmd,
                                          &g_stream_cbs);
@@ -440,6 +443,8 @@ int main(int argc, char **argv)
             resp = llm_chat_stream(NULL, cwd, last_output, NULL, 0,
                                    &g_stream_cbs);
         }
+
+        streams_llm_active = 0;
 
         /* Text was already streamed; just add trailing newline and save to history */
         if (resp && resp->text && resp->text[0]) {
@@ -577,6 +582,7 @@ int main(int argc, char **argv)
                 char *mc = pathscan_match_input(llm_prompt, &fw);
 
                 history_add_user(full_query);
+                streams_llm_active = 1;
                 llm_response_t *resp = llm_chat_stream(full_query, cwd, last_output,
                                                  mc, fw, &g_stream_cbs);
                 free(full_query);
@@ -619,6 +625,7 @@ int main(int argc, char **argv)
                     resp = llm_chat_stream(NULL, cwd, last_output, NULL, 0,
                                            &g_stream_cbs);
                 }
+                streams_llm_active = 0;
                 if (resp && resp->text && resp->text[0]) {
                     stream_chat_output("\n");
                     history_add_assistant(resp->text);
@@ -636,6 +643,7 @@ int main(int argc, char **argv)
 
         /* Pure natural language — send to LLM */
         history_add_user(line);
+        streams_llm_active = 1;
         llm_response_t *resp = llm_chat_stream(line, cwd, last_output,
                                          matched_cmds, 0,
                                          &g_stream_cbs);
@@ -643,6 +651,7 @@ int main(int argc, char **argv)
         free(matched_cmds);
 
         if (!resp) {
+            streams_llm_active = 0;
             fprintf(stderr, "llmsh: LLM request failed\n");
             continue;
         }
@@ -690,6 +699,8 @@ int main(int argc, char **argv)
             resp = llm_chat_stream(NULL, cwd, last_output, NULL, 0,
                                    &g_stream_cbs);
         }
+
+        streams_llm_active = 0;
 
         /* Final text already streamed; just add newline and save history */
         if (resp && resp->text && resp->text[0]) {

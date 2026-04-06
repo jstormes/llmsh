@@ -9,6 +9,7 @@
 FILE *stdchat = NULL;
 int streams_verbose = 1;
 int streams_label_mode = 0;
+int streams_llm_active = 0;
 
 /* Track whether we're at the start of a line for each stream (for prefixing) */
 static int chat_sol = 1;   /* start-of-line for chat */
@@ -72,7 +73,10 @@ static void labeled_write(FILE *fp, const char *label, const char *color,
 
 void stream_tool_output(const char *text)
 {
-    if (streams_verbose && text)
+    if (!text) return;
+    /* During LLM agentic loops, suppress unless debug mode */
+    if (streams_llm_active && streams_label_mode < 2) return;
+    if (streams_verbose)
         labeled_write(stdout, "stdout", "\033[36m", text, &tool_sol);
 }
 

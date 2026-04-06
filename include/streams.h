@@ -12,6 +12,13 @@ extern FILE *stdchat;
 extern int streams_verbose;
 
 /*
+ * Suppress tool output during LLM agentic loops.
+ * When set, stream_tool_output() is silenced unless debug mode is on.
+ * Direct shell execution should clear this flag.
+ */
+extern int streams_llm_active;
+
+/*
  * Label mode:
  *   0 = off (default)
  *   1 = labels: prefix lines with [chat], [stdout], [think], [tool], [api]
