@@ -58,6 +58,8 @@ static const char *SYSTEM_PROMPT =
     "for arbitrary shell command pipelines.\n\n"
     "Rules:\n"
     "- Prefer built-in tools over 'run' when possible for natural language.\n"
+    "- ALWAYS use the 'write_file' tool to create or write files. Never use "
+    "'run' with 'write', 'echo >', or 'cat >' for writing files.\n"
     "- For direct commands, always use 'run' to preserve exact behavior.\n"
     "- Use 'run' with pipeline array for pipes: [\"grep -r TODO\", \"wc -l\"].\n"
     "- Be concise in text responses. Show results, not explanations.\n"
