@@ -22,6 +22,43 @@ static void sigint_handler(int sig)
     interrupted = 1;
 }
 
+static void show_help(void)
+{
+    printf(
+        "llmsh - natural language shell\n"
+        "\n"
+        "Type plain English to interact with your system. The LLM translates\n"
+        "your intent into file operations and shell commands.\n"
+        "\n"
+        "Examples:\n"
+        "  show me what's in this directory\n"
+        "  find all .c files larger than 10k\n"
+        "  count the lines of code in src/\n"
+        "  make a backup of config.yaml\n"
+        "  search for TODO comments in the project\n"
+        "\n"
+        "Built-in tools (no confirmation needed):\n"
+        "  ls, cat, head, wc, grep, pwd, cd, read_file\n"
+        "\n"
+        "Write tools (confirmation required):\n"
+        "  cp, mv, mkdir, write_file\n"
+        "\n"
+        "Dangerous tools (explicit confirmation):\n"
+        "  rm, run (arbitrary shell commands with pipes/redirection)\n"
+        "\n"
+        "Commands:\n"
+        "  /server              List configured servers\n"
+        "  /server <name>       Switch to a different LLM server\n"
+        "  /clear               Clear conversation history\n"
+        "  help                 Show this help message\n"
+        "  exit, quit           Exit the shell\n"
+        "\n"
+        "Configuration:\n"
+        "  ~/.llmshrc           Server configuration (INI format)\n"
+        "  ~/.llmsh_history     Command history\n"
+    );
+}
+
 /* Handle /server commands. Returns 1 if handled, 0 if not a server command. */
 static int handle_server_cmd(const char *line)
 {
@@ -121,6 +158,20 @@ int main(int argc, char **argv)
         add_history(line);
 
         /* Handle built-in shell commands */
+        if (strcmp(line, "help") == 0 || strcmp(line, "/help") == 0) {
+            show_help();
+            free(line);
+            continue;
+        }
+
+        if (strcmp(line, "/clear") == 0) {
+            history_cleanup();
+            history_init();
+            printf("Conversation history cleared.\n");
+            free(line);
+            continue;
+        }
+
         if (handle_server_cmd(line)) {
             free(line);
             continue;
