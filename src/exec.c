@@ -60,12 +60,18 @@ char *exec_pipeline(const char **pipeline, int n_cmds,
                     int append)
 {
     if (n_cmds <= 0) return strdup("error: empty pipeline");
+    if (n_cmds > 64) return strdup("error: pipeline too long (max 64)");
 
-    int pipefds[2 * (n_cmds - 1)];
+    int *pipefds = NULL;
+    if (n_cmds > 1) {
+        pipefds = malloc(2 * (n_cmds - 1) * sizeof(int));
+        if (!pipefds) return strdup("error: malloc failed");
+    }
 
     /* Create all pipes */
     for (int i = 0; i < n_cmds - 1; i++) {
         if (pipe(pipefds + 2 * i) < 0) {
+            free(pipefds);
             return strdup("error: pipe() failed");
         }
     }
@@ -73,11 +79,13 @@ char *exec_pipeline(const char **pipeline, int n_cmds,
     /* For capturing output of the last command */
     int capture_pipe[2] = {-1, -1};
     if (!stdout_file) {
-        if (pipe(capture_pipe) < 0)
+        if (pipe(capture_pipe) < 0) {
+            free(pipefds);
             return strdup("error: pipe() failed");
+        }
     }
 
-    pid_t pids[n_cmds];
+    pid_t *pids = calloc(n_cmds, sizeof(pid_t));
 
     for (int i = 0; i < n_cmds; i++) {
         int argc;
@@ -90,6 +98,8 @@ char *exec_pipeline(const char **pipeline, int n_cmds,
         pids[i] = fork();
         if (pids[i] < 0) {
             free_argv(argv);
+            free(pipefds);
+            free(pids);
             return strdup("error: fork() failed");
         }
 
@@ -163,5 +173,7 @@ char *exec_pipeline(const char **pipeline, int n_cmds,
     for (int i = 0; i < n_cmds; i++)
         waitpid(pids[i], NULL, 0);
 
+    free(pipefds);
+    free(pids);
     return output ? output : strdup("");
 }
