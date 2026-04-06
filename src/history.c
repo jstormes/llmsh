@@ -6,15 +6,19 @@
 #include "config.h"
 #include "cJSON.h"
 
+/*
+ * Each history entry stores a pre-built cJSON object representing
+ * the message. This preserves the full structure including tool_calls
+ * arrays and tool-role messages with tool_call_id.
+ */
 typedef struct {
-    char *role;     /* "system", "user", "assistant", "tool" */
-    char *content;
+    cJSON *message;  /* owns the JSON object */
 } message_t;
 
 static message_t *messages = NULL;
 static int msg_count = 0;
 static int msg_cap = 0;
-static int msg_max = 0;  /* max before eviction (LLMSH_MAX_HISTORY * 3) */
+static int msg_max = 0;
 
 void history_init(void)
 {
@@ -29,70 +33,115 @@ void history_init(void)
 void history_cleanup(void)
 {
     for (int i = 0; i < msg_count; i++) {
-        free(messages[i].role);
-        free(messages[i].content);
-        messages[i].role = NULL;
-        messages[i].content = NULL;
+        cJSON_Delete(messages[i].message);
+        messages[i].message = NULL;
     }
     msg_count = 0;
 }
 
-static void add_message(const char *role, const char *content)
+static void add_json_message(cJSON *msg)
 {
-    if (!role || !content) return;
+    if (!msg) return;
 
     /* Evict oldest if at capacity */
     if (msg_count >= msg_max) {
-        free(messages[0].role);
-        free(messages[0].content);
+        cJSON_Delete(messages[0].message);
         memmove(&messages[0], &messages[1], (msg_count - 1) * sizeof(message_t));
         msg_count--;
     }
 
-    /* Grow if needed (shouldn't happen after init, but be safe) */
+    /* Grow if needed */
     if (msg_count >= msg_cap) {
         msg_cap = (msg_cap == 0) ? 64 : msg_cap * 2;
         messages = realloc(messages, msg_cap * sizeof(message_t));
-        if (!messages) return; /* OOM */
+        if (!messages) { cJSON_Delete(msg); return; }
     }
 
-    char *r = strdup(role);
-    char *c = strdup(content);
-    if (!r || !c) { free(r); free(c); return; } /* OOM */
-
-    messages[msg_count].role = r;
-    messages[msg_count].content = c;
+    messages[msg_count].message = msg;
     msg_count++;
 }
 
 void history_add_user(const char *text)
 {
-    add_message("user", text);
+    if (!text) return;
+    cJSON *msg = cJSON_CreateObject();
+    cJSON_AddStringToObject(msg, "role", "user");
+    cJSON_AddStringToObject(msg, "content", text);
+    add_json_message(msg);
 }
 
 void history_add_assistant(const char *text)
 {
-    add_message("assistant", text);
+    if (!text) return;
+    cJSON *msg = cJSON_CreateObject();
+    cJSON_AddStringToObject(msg, "role", "assistant");
+    cJSON_AddStringToObject(msg, "content", text);
+    add_json_message(msg);
 }
 
-void history_add_tool_result(const char *tool_name, const char *result)
+void history_add_assistant_tool_calls(const char *text,
+                                       const tool_call_t *tool_calls,
+                                       int num_tool_calls)
 {
-    if (!tool_name || !result) return;
+    cJSON *msg = cJSON_CreateObject();
+    cJSON_AddStringToObject(msg, "role", "assistant");
+
+    /* Content may be null when only tool calls are present */
+    if (text && text[0])
+        cJSON_AddStringToObject(msg, "content", text);
+    else
+        cJSON_AddNullToObject(msg, "content");
+
+    /* Build tool_calls array */
+    cJSON *tcs = cJSON_CreateArray();
+    for (int i = 0; i < num_tool_calls; i++) {
+        cJSON *tc = cJSON_CreateObject();
+        cJSON_AddStringToObject(tc, "id",
+            tool_calls[i].id ? tool_calls[i].id : "unknown");
+        cJSON_AddStringToObject(tc, "type", "function");
+
+        cJSON *fn = cJSON_CreateObject();
+        cJSON_AddStringToObject(fn, "name",
+            tool_calls[i].name ? tool_calls[i].name : "unknown");
+        cJSON_AddStringToObject(fn, "arguments",
+            tool_calls[i].arguments ? tool_calls[i].arguments : "{}");
+        cJSON_AddItemToObject(tc, "function", fn);
+
+        cJSON_AddItemToArray(tcs, tc);
+    }
+    cJSON_AddItemToObject(msg, "tool_calls", tcs);
+
+    add_json_message(msg);
+}
+
+void history_add_tool_result(const char *tool_call_id,
+                              const char *tool_name,
+                              const char *result)
+{
+    if (!result) return;
 
     /* Truncate large outputs */
-    char buf[LLMSH_MAX_OUTPUT_CAPTURE];
-    if (strlen(result) >= sizeof(buf)) {
-        memcpy(buf, result, sizeof(buf) - 20);
-        strcpy(buf + sizeof(buf) - 20, "\n[truncated]");
-        add_message("user", buf);
-    } else {
-        size_t len = strlen(tool_name) + strlen(result) + 32;
-        char *msg = malloc(len);
-        if (!msg) return;
-        snprintf(msg, len, "[%s output]:\n%s", tool_name, result);
-        add_message("user", msg);
-        free(msg);
+    const char *content = result;
+    char *truncated = NULL;
+    if (strlen(result) >= LLMSH_MAX_OUTPUT_CAPTURE) {
+        truncated = malloc(LLMSH_MAX_OUTPUT_CAPTURE);
+        if (truncated) {
+            memcpy(truncated, result, LLMSH_MAX_OUTPUT_CAPTURE - 20);
+            strcpy(truncated + LLMSH_MAX_OUTPUT_CAPTURE - 20, "\n[truncated]");
+            content = truncated;
+        }
     }
+
+    cJSON *msg = cJSON_CreateObject();
+    cJSON_AddStringToObject(msg, "role", "tool");
+    cJSON_AddStringToObject(msg, "tool_call_id",
+        tool_call_id ? tool_call_id : "unknown");
+    if (tool_name)
+        cJSON_AddStringToObject(msg, "name", tool_name);
+    cJSON_AddStringToObject(msg, "content", content);
+
+    add_json_message(msg);
+    free(truncated);
 }
 
 char *history_build_messages(const char *system_prompt)
@@ -106,13 +155,11 @@ char *history_build_messages(const char *system_prompt)
     cJSON_AddStringToObject(sys, "content", system_prompt);
     cJSON_AddItemToArray(arr, sys);
 
-    /* Add history */
+    /* Add history — deep copy each stored message */
     for (int i = 0; i < msg_count; i++) {
-        if (!messages[i].role || !messages[i].content) continue;
-        cJSON *msg = cJSON_CreateObject();
-        cJSON_AddStringToObject(msg, "role", messages[i].role);
-        cJSON_AddStringToObject(msg, "content", messages[i].content);
-        cJSON_AddItemToArray(arr, msg);
+        if (!messages[i].message) continue;
+        cJSON *copy = cJSON_Duplicate(messages[i].message, 1);
+        if (copy) cJSON_AddItemToArray(arr, copy);
     }
 
     char *json = cJSON_PrintUnformatted(arr);

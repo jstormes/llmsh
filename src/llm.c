@@ -226,6 +226,9 @@ static llm_response_t *parse_full_response(const char *json_str)
             result->num_tool_calls = n;
             for (int i = 0; i < n; i++) {
                 cJSON *tc = cJSON_GetArrayItem(tcs, i);
+                cJSON *tc_id = cJSON_GetObjectItem(tc, "id");
+                if (tc_id && cJSON_IsString(tc_id))
+                    result->tool_calls[i].id = strdup(tc_id->valuestring);
                 cJSON *fn = cJSON_GetObjectItem(tc, "function");
                 if (fn) {
                     cJSON *name = cJSON_GetObjectItem(fn, "name");
@@ -434,6 +437,11 @@ static void sse_process_data(sse_state_t *st, const char *data)
                 if (idx >= st->num_tool_calls)
                     st->num_tool_calls = idx + 1;
 
+                /* Tool call ID (first chunk has it) */
+                cJSON *tc_id = cJSON_GetObjectItem(tc, "id");
+                if (tc_id && cJSON_IsString(tc_id) && !st->tool_calls[idx].id)
+                    st->tool_calls[idx].id = strdup(tc_id->valuestring);
+
                 /* Function name (first chunk for this tool call) */
                 cJSON *fn = cJSON_GetObjectItem(tc, "function");
                 if (fn) {
@@ -592,6 +600,7 @@ void llm_response_free(llm_response_t *resp)
     if (!resp) return;
     free(resp->text);
     for (int i = 0; i < resp->num_tool_calls; i++) {
+        free(resp->tool_calls[i].id);
         free(resp->tool_calls[i].name);
         free(resp->tool_calls[i].arguments);
     }

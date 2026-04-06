@@ -55,20 +55,27 @@ char *shell_agentic_loop(shell_ctx_t *ctx, llm_response_t *resp)
            && !interrupted && iterations < ctx->max_iterations) {
         iterations++;
 
-        if (resp->text && resp->text[0]) {
+        /* Stream any assistant text before tool calls */
+        if (resp->text && resp->text[0])
             stream_chat_output("\n");
-            history_add_assistant(resp->text);
-        }
+
+        /* Record assistant message with tool_calls (OpenAI protocol) */
+        history_add_assistant_tool_calls(resp->text,
+                                          resp->tool_calls,
+                                          resp->num_tool_calls);
 
         set_last_output(ctx, NULL);
 
+        /* Execute each tool call and record results */
         for (int i = 0; i < resp->num_tool_calls && !interrupted; i++) {
             char *result = router_dispatch(&resp->tool_calls[i]);
             if (result) {
                 stream_tool_output(result);
                 if (result[0] && result[strlen(result)-1] != '\n')
                     stream_tool_output("\n");
-                history_add_tool_result(resp->tool_calls[i].name, result);
+                history_add_tool_result(resp->tool_calls[i].id,
+                                        resp->tool_calls[i].name,
+                                        result);
                 set_last_output(ctx, result);
             }
         }

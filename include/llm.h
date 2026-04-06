@@ -3,6 +3,7 @@
 
 /* Tool call returned by the LLM */
 typedef struct {
+    char *id;           /* tool_call_id for matching response */
     char *name;
     char *arguments;    /* raw JSON string of arguments */
 } tool_call_t;

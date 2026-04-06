@@ -74,6 +74,7 @@ static void test_llm_response_free_with_data(void)
     resp->text = strdup("hello");
     resp->num_tool_calls = 1;
     resp->tool_calls = calloc(1, sizeof(tool_call_t));
+    resp->tool_calls[0].id = strdup("call_1");
     resp->tool_calls[0].name = strdup("ls");
     resp->tool_calls[0].arguments = strdup("{\"path\":\".\"}");
     llm_response_free(resp);
