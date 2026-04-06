@@ -133,8 +133,11 @@ static void strip_backspaces(char *text)
 {
     char *r = text, *w = text;
     while (*r) {
-        if (*(r + 1) == '\b') {
+        if (r[0] != '\0' && r[1] == '\b' && r[2] != '\0') {
             r += 2; /* skip char + backspace, keep next char */
+        } else if (*r == '\b') {
+            r++; /* stray backspace, skip */
+            if (w > text) w--; /* erase previous char */
         } else {
             *w++ = *r++;
         }
@@ -174,17 +177,18 @@ char *manscan_detail(const char *cmd, int max_bytes)
 
     while (fgets(buf, sizeof(buf), fp)) {
         size_t blen = strlen(buf);
-        if (raw_len + blen + 1 > raw_cap) {
+        while (raw_len + blen + 1 > raw_cap) {
             raw_cap = (raw_cap == 0) ? 8192 : raw_cap * 2;
-            raw = realloc(raw, raw_cap);
         }
+        raw = realloc(raw, raw_cap);
+        if (!raw) { pclose(fp); return NULL; }
         memcpy(raw + raw_len, buf, blen);
         raw_len += blen;
+        raw[raw_len] = '\0';
     }
     pclose(fp);
 
-    if (!raw) return NULL;
-    raw[raw_len] = '\0';
+    if (!raw || raw_len == 0) { free(raw); return NULL; }
 
     /* Strip backspace formatting */
     strip_backspaces(raw);
@@ -219,11 +223,10 @@ char *manscan_detail(const char *cmd, int max_bytes)
         }
 
         if (in_wanted_section) {
-            size_t to_copy = llen + 1; /* +1 for newline */
-            if (res_len + to_copy >= (size_t)max_bytes)
-                to_copy = max_bytes - res_len;
-            memcpy(result + res_len, line, to_copy > llen ? llen : to_copy);
-            res_len += llen;
+            size_t avail = (size_t)max_bytes - res_len;
+            size_t to_copy = llen < avail ? llen : avail;
+            memcpy(result + res_len, line, to_copy);
+            res_len += to_copy;
             if (res_len < (size_t)max_bytes)
                 result[res_len++] = '\n';
         }
