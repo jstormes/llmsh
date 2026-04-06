@@ -1,5 +1,8 @@
 *.o
 llmsh
+tests/test_*
+!tests/test_*.c
+!tests/test.h
 *.swp
 *.swo
 *~
