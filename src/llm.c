@@ -115,7 +115,6 @@ static char *build_system_prompt(const char *cwd, const char *last_output,
                                   const char *matched_cmds, int first_word_is_cmd)
 {
     size_t sys_len = strlen(SYSTEM_PROMPT) + strlen(cwd) + 576;
-    if (last_output) sys_len += strlen(last_output);
     if (matched_cmds) sys_len += strlen(matched_cmds) + 256;
 
     /* Get current date/time and user */
@@ -145,10 +144,10 @@ static char *build_system_prompt(const char *cwd, const char *last_output,
         }
     }
 
-    if (last_output) {
-        snprintf(sys_buf + off, sys_len - off,
-                 "\nLast command output (truncated):\n%s\n", last_output);
-    }
+    /* last_output no longer injected into system prompt —
+     * tool results are properly in the message history via
+     * the tool-call protocol (role:"tool" messages) */
+    (void)last_output;
 
     return sys_buf;
 }
