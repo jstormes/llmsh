@@ -17,6 +17,8 @@ typedef struct {
 
     /* Global settings from [settings] section */
     int max_iterations;
+    int man_enrich;      /* 0=off, 1=whatis auto (default) */
+    int man_max_bytes;   /* max bytes for detail lookups (default: 4096) */
 } server_config_t;
 
 /* Load config from ~/.llmshrc. Falls back to env vars. */

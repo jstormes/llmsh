@@ -7,8 +7,16 @@
 #include "exec.h"
 #include "safety.h"
 #include "streams.h"
+#include "manscan.h"
 #include "config.h"
 #include "cJSON.h"
+
+static const server_config_t *g_conf = NULL;
+
+void router_init(const server_config_t *conf)
+{
+    g_conf = conf;
+}
 
 /* Commands that are read-only / safe to run without confirmation */
 static const char *safe_commands[] = {
@@ -135,6 +143,24 @@ static char *handle_run(const char *args_json)
     int append = (append_j && cJSON_IsTrue(append_j));
 
     char *result = exec_pipeline(cmds, n, sin, sout, append);
+
+    /* Tier 1: inject whatis summaries for pipeline commands */
+    if (g_conf && g_conf->man_enrich >= 1) {
+        char *man_ctx = manscan_enrich_pipeline(cmds, n);
+        if (man_ctx) {
+            stream_man_output(man_ctx);
+
+            size_t mc_len = strlen(man_ctx);
+            size_t r_len = result ? strlen(result) : 0;
+            char *enriched = malloc(mc_len + r_len + 32);
+            snprintf(enriched, mc_len + r_len + 32,
+                     "[man context]\n%s[output]\n%s",
+                     man_ctx, result ? result : "");
+            free(result);
+            free(man_ctx);
+            result = enriched;
+        }
+    }
 
     free(cmds);
     cJSON_Delete(args);

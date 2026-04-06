@@ -37,6 +37,9 @@ void stream_think_output(const char *text);
 /* Write tool call info (name + args) before execution */
 void stream_tool_call(const char *name, const char *args);
 
+/* Write man page RAG lookup info */
+void stream_man_output(const char *text);
+
 /* Write API debug info (request/response summaries) */
 void stream_api_output(const char *direction, const char *text);
 

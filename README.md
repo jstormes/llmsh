@@ -174,20 +174,64 @@ default@~> review the code
 | `[stdout]` | Cyan | Tool execution output |
 | `[think]` | Magenta | LLM reasoning/thinking tokens |
 | `[tool]` | Yellow | Tool call name and arguments (before execution) |
+| `[man]` | Bright magenta | Man page RAG lookups (automatic + on-demand) |
 | `[api]` | Gray | API request/response info (debug mode only) |
 
 **Debug mode** (`-d` or `/debug`) adds API-level information:
 
 ```
 [api→] http://ai:8080/v1/chat/completions
-[tool] ls({"path":"."})
-[stdout] src/main.c  src/llm.c
-[chat] Here are your files...
+[tool] run({"pipeline":["grep -rn TODO src/"]})
+[man] grep: print lines that match patterns
+[stdout] src/main.c:42: // TODO: implement
+[chat] Found 1 TODO comment...
 [api←] text=142B, tool_calls=0
 ```
 
 Thinking tokens are detected from multiple API formats:
 `reasoning_content` (OpenAI), `thinking` (Anthropic/llama.cpp), `reasoning`.
+
+## Man Page RAG
+
+On startup, llmsh indexes all man page summaries (~3000 entries) into a hash
+table using the `whatis` database. This gives the LLM accurate knowledge of
+available commands and their purposes.
+
+### Tier 1: Automatic Enrichment
+
+Every time the LLM uses the `run` tool to execute a command, the one-line man
+page summary for each command in the pipeline is automatically injected into the
+result. The LLM sees this context and can use it to refine subsequent commands.
+
+Visible in label mode as `[man]`:
+```
+[man] grep: print lines that match patterns
+[man] wc: print newline, word, and byte counts
+```
+
+### Tier 2: On-demand Detail
+
+The LLM can explicitly call the `man` tool to get detailed documentation
+(NAME, SYNOPSIS, OPTIONS sections) when it needs exact flags or usage info:
+
+```
+default@~> what flags does tar use for gzip compression?
+[tool] man({"command":"tar"})
+[man] NAME: tar - an archiving utility
+      SYNOPSIS: tar [OPTION...] [FILE]...
+      OPTIONS: -z, --gzip: filter the archive through gzip
+               -c, --create: create a new archive
+               ...
+[chat] Use tar -czf archive.tar.gz files/ for gzip compression.
+```
+
+### Configuration
+
+```ini
+[settings]
+man_enrich = 1         # 0=off, 1=auto whatis with run (default)
+man_max_bytes = 4096   # max bytes for detail lookups
+```
 
 ## SSE Streaming
 

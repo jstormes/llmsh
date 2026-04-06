@@ -31,5 +31,6 @@ char *builtin_head(const char *args_json);
 char *builtin_wc(const char *args_json);
 char *builtin_write_file(const char *args_json);
 char *builtin_read_file(const char *args_json);
+char *builtin_man(const char *args_json);
 
 #endif /* LLMSH_BUILTIN_H */

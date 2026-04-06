@@ -4,7 +4,7 @@ LDFLAGS = -lcurl -lreadline
 
 SRCS    = src/main.c src/llm.c src/router.c src/builtin.c src/exec.c \
           src/history.c src/safety.c src/json_helpers.c src/serverconf.c \
-          src/pathscan.c src/streams.c vendor/cJSON.c
+          src/pathscan.c src/streams.c src/manscan.c vendor/cJSON.c
 OBJS    = $(SRCS:.c=.o)
 TARGET  = llmsh
 

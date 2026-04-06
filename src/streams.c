@@ -14,6 +14,7 @@ int streams_label_mode = 0;
 static int chat_sol = 1;   /* start-of-line for chat */
 static int tool_sol = 1;   /* start-of-line for tool output */
 static int think_sol = 1;  /* start-of-line for thinking */
+static int man_sol = 1;    /* start-of-line for man lookups */
 
 void streams_init(void)
 {
@@ -85,6 +86,12 @@ void stream_think_output(const char *text)
 {
     if (!text || !stdchat || !streams_label_mode) return;
     labeled_write(stdchat, "think", "\033[35m", text, &think_sol);
+}
+
+void stream_man_output(const char *text)
+{
+    if (!text || !stdchat || !streams_label_mode) return;
+    labeled_write(stdchat, "man", "\033[95m", text, &man_sol);
 }
 
 void stream_tool_call(const char *name, const char *args)

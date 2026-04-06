@@ -16,6 +16,7 @@
 #include "history.h"
 #include "serverconf.h"
 #include "pathscan.h"
+#include "manscan.h"
 #include "streams.h"
 
 static volatile sig_atomic_t interrupted = 0;
@@ -285,7 +286,6 @@ int main(int argc, char **argv)
     /* Setup */
     signal(SIGINT, sigint_handler);
     streams_init();
-    builtin_init();
     history_init();
 
     /* Readline history - load from file */
@@ -299,16 +299,19 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    /* Build PATH command hash table */
+    /* Build PATH command hash table and man page index */
     int ncmds = pathscan_init();
+    int nman = manscan_init();
+    builtin_init();
+    router_init(g_servers);
 
     {
         char banner[512];
         snprintf(banner, sizeof(banner),
                  "llmsh - natural language shell\n"
-                 "Server: %s (%s) | %d commands in PATH\n"
+                 "Server: %s (%s) | %d commands in PATH | %d man pages indexed\n"
                  "Type natural language or shell commands. 'help' for usage. 'exit' to quit.\n\n",
-                 active->name, active->model, ncmds);
+                 active->name, active->model, ncmds, nman);
         stream_chat_output(banner);
     }
 
@@ -389,6 +392,7 @@ int main(int argc, char **argv)
             history_cleanup();
             llm_cleanup();
             pathscan_cleanup();
+            manscan_cleanup();
             streams_cleanup();
             serverconf_free(g_servers);
             return 0;
@@ -449,10 +453,12 @@ int main(int argc, char **argv)
         history_cleanup();
         llm_cleanup();
         pathscan_cleanup();
+        manscan_cleanup();
         streams_cleanup();
         serverconf_free(g_servers);
         return 0;
     }
+
 
     /* Interactive REPL */
     for (;;) {
@@ -703,6 +709,7 @@ int main(int argc, char **argv)
     history_cleanup();
     llm_cleanup();
     pathscan_cleanup();
+    manscan_cleanup();
     streams_cleanup();
     serverconf_free(g_servers);
 

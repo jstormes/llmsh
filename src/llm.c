@@ -29,6 +29,7 @@ static const char *TOOLS_JSON =
 "  {\"type\":\"function\",\"function\":{\"name\":\"grep\",\"description\":\"Search file contents\",\"parameters\":{\"type\":\"object\",\"properties\":{\"pattern\":{\"type\":\"string\"},\"path\":{\"type\":\"string\"},\"recursive\":{\"type\":\"boolean\"},\"ignore_case\":{\"type\":\"boolean\"}},\"required\":[\"pattern\"]}}},"
 "  {\"type\":\"function\",\"function\":{\"name\":\"head\",\"description\":\"Show first N lines of a file\",\"parameters\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"lines\":{\"type\":\"integer\"}},\"required\":[\"path\"]}}},"
 "  {\"type\":\"function\",\"function\":{\"name\":\"wc\",\"description\":\"Count lines/words/chars\",\"parameters\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"flags\":{\"type\":\"string\"}},\"required\":[\"path\"]}}},"
+"  {\"type\":\"function\",\"function\":{\"name\":\"man\",\"description\":\"Get detailed man page for a command (synopsis, options, usage). Use when you need exact flags or options.\",\"parameters\":{\"type\":\"object\",\"properties\":{\"command\":{\"type\":\"string\",\"description\":\"Command name to look up\"}},\"required\":[\"command\"]}}},"
 "  {\"type\":\"function\",\"function\":{\"name\":\"run\",\"description\":\"Execute a shell command pipeline. Use for any command not covered by builtins.\",\"parameters\":{\"type\":\"object\",\"properties\":{\"pipeline\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"description\":\"Array of commands to pipe together\"},\"stdin_file\":{\"type\":\"string\"},\"stdout_file\":{\"type\":\"string\"},\"append\":{\"type\":\"boolean\"}},\"required\":[\"pipeline\"]}}}"
 "]";
 
@@ -53,7 +54,11 @@ static const char *SYSTEM_PROMPT =
     "- For direct commands, always use 'run' to preserve exact behavior.\n"
     "- Use 'run' with pipeline array for pipes: [\"grep -r TODO\", \"wc -l\"].\n"
     "- Be concise in text responses. Show results, not explanations.\n"
-    "- For destructive operations, the safety system will handle confirmation.";
+    "- For destructive operations, the safety system will handle confirmation.\n\n"
+    "Man page support:\n"
+    "- One-line command summaries are automatically included with 'run' results.\n"
+    "- Use the 'man' tool when you need specific flags, options, or usage details.\n"
+    "- Prefer 'man' over guessing flags — it returns accurate system documentation.";
 
 /* ── Shared helpers ──────────────────────────────────────────────── */
 

@@ -8,6 +8,8 @@
 #include <fcntl.h>
 
 #include "builtin.h"
+#include "manscan.h"
+#include "streams.h"
 #include "config.h"
 #include "cJSON.h"
 
@@ -24,6 +26,7 @@ static builtin_t builtins[] = {
     {"mv",         builtin_mv,         SAFETY_CONFIRM, "Move/rename files"},
     {"mkdir",      builtin_mkdir,      SAFETY_CONFIRM, "Create directory"},
     {"write_file", builtin_write_file, SAFETY_CONFIRM, "Write content to file"},
+    {"man",        builtin_man,        SAFETY_AUTO,    "Get detailed man page info"},
     {"rm",         builtin_rm,         SAFETY_DANGER,  "Remove files"},
     {NULL, NULL, 0, NULL}
 };
@@ -423,4 +426,28 @@ char *builtin_write_file(const char *args_json)
     char msg[256];
     snprintf(msg, sizeof(msg), "wrote %s", p->valuestring);
     return strdup(msg);
+}
+
+char *builtin_man(const char *args_json)
+{
+    cJSON *args = cJSON_Parse(args_json);
+    if (!args) return strdup("error: invalid args");
+
+    cJSON *cmd = cJSON_GetObjectItem(args, "command");
+    if (!cmd || !cJSON_IsString(cmd)) {
+        cJSON_Delete(args);
+        return strdup("error: command required");
+    }
+
+    cJSON *max = cJSON_GetObjectItem(args, "max_bytes");
+    int max_bytes = (max && cJSON_IsNumber(max)) ? max->valueint : 4096;
+
+    char *detail = manscan_detail(cmd->valuestring, max_bytes);
+    cJSON_Delete(args);
+
+    if (!detail)
+        return strdup("(no man page found)");
+
+    stream_man_output(detail);
+    return detail;
 }

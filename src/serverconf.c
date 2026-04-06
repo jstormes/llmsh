@@ -30,6 +30,8 @@ server_config_t *serverconf_load(void)
 
     /* Defaults for global settings */
     conf->max_iterations = LLMSH_MAX_ITERATIONS;
+    conf->man_enrich = 1;
+    conf->man_max_bytes = 4096;
 
     FILE *f = fopen(path, "r");
     if (f) {
@@ -72,6 +74,10 @@ server_config_t *serverconf_load(void)
             if (in_settings) {
                 if (strcmp(key, "max_iterations") == 0)
                     conf->max_iterations = atoi(val);
+                else if (strcmp(key, "man_enrich") == 0)
+                    conf->man_enrich = atoi(val);
+                else if (strcmp(key, "man_max_bytes") == 0)
+                    conf->man_max_bytes = atoi(val);
                 continue;
             }
 
