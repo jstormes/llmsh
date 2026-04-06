@@ -11,6 +11,14 @@ extern FILE *stdchat;
 /* Whether tool output (fd 1) should be displayed. 1 = show (default), 0 = hidden */
 extern int streams_verbose;
 
+/*
+ * Label mode:
+ *   0 = off (default)
+ *   1 = labels: prefix lines with [chat], [stdout], [think], [tool], [api]
+ *   2 = debug: labels + raw API request/response data
+ */
+extern int streams_label_mode;
+
 /* Initialize streams: set up fd 3 for chat output */
 void streams_init(void);
 
@@ -22,5 +30,14 @@ void stream_tool_output(const char *text);
 
 /* Write LLM chat text to stdchat (fd 3) */
 void stream_chat_output(const char *text);
+
+/* Write LLM thinking/reasoning text to stdchat (fd 3) */
+void stream_think_output(const char *text);
+
+/* Write tool call info (name + args) before execution */
+void stream_tool_call(const char *name, const char *args);
+
+/* Write API debug info (request/response summaries) */
+void stream_api_output(const char *direction, const char *text);
 
 #endif /* LLMSH_STREAMS_H */

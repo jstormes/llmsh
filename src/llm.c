@@ -6,6 +6,7 @@
 #include "llm.h"
 #include "history.h"
 #include "config.h"
+#include "streams.h"
 #include "cJSON.h"
 
 static char *g_api_url = NULL;
@@ -268,16 +269,14 @@ typedef struct {
     size_t tc_args_cap[LLMSH_MAX_STREAM_TOOL_CALLS];
     int num_tool_calls;
 
-    /* Callback */
-    llm_token_cb token_cb;
-    void *userdata;
+    /* Callbacks */
+    llm_stream_cbs cbs;
 } sse_state_t;
 
-static void sse_state_init(sse_state_t *st, llm_token_cb cb, void *ud)
+static void sse_state_init(sse_state_t *st, llm_stream_cbs *cbs)
 {
     memset(st, 0, sizeof(*st));
-    st->token_cb = cb;
-    st->userdata = ud;
+    if (cbs) st->cbs = *cbs;
 }
 
 static void sse_state_cleanup(sse_state_t *st)
@@ -335,8 +334,20 @@ static void sse_process_data(sse_state_t *st, const char *data)
             const char *tok = content->valuestring;
             size_t toklen = strlen(tok);
             sse_append_text(st, tok, toklen);
-            if (st->token_cb)
-                st->token_cb(tok, st->userdata);
+            if (st->cbs.on_token)
+                st->cbs.on_token(tok, st->cbs.userdata);
+        }
+
+        /* Thinking/reasoning tokens — various API formats */
+        /* OpenAI: reasoning_content, Anthropic: thinking, llama.cpp: thinking */
+        const char *think_keys[] = {"reasoning_content", "thinking", "reasoning", NULL};
+        for (int k = 0; think_keys[k]; k++) {
+            cJSON *think = cJSON_GetObjectItem(delta, think_keys[k]);
+            if (think && cJSON_IsString(think) && think->valuestring[0]) {
+                if (st->cbs.on_thinking)
+                    st->cbs.on_thinking(think->valuestring, st->cbs.userdata);
+                break;
+            }
         }
 
         /* Tool call deltas */
@@ -433,10 +444,10 @@ static size_t curl_sse_write_cb(void *ptr, size_t size, size_t nmemb, void *user
 llm_response_t *llm_chat_stream(const char *user_input, const char *cwd,
                                  const char *last_output,
                                  const char *matched_cmds, int first_word_is_cmd,
-                                 llm_token_cb token_cb, void *userdata)
+                                 llm_stream_cbs *cbs)
 {
-    /* Fall back to non-streaming if no callback */
-    if (!token_cb)
+    /* Fall back to non-streaming if no callbacks */
+    if (!cbs || !cbs->on_token)
         return llm_chat(user_input, cwd, last_output, matched_cmds, first_word_is_cmd);
 
     (void)user_input;
@@ -446,11 +457,14 @@ llm_response_t *llm_chat_stream(const char *user_input, const char *cwd,
     free(sys_prompt);
     if (!body) return NULL;
 
+    /* API debug output */
+    stream_api_output("→", g_api_url);
+
     CURL *curl = curl_easy_init();
     if (!curl) { free(body); return NULL; }
 
     sse_state_t sse;
-    sse_state_init(&sse, token_cb, userdata);
+    sse_state_init(&sse, cbs);
 
     struct curl_slist *headers = build_headers();
 
@@ -470,6 +484,14 @@ llm_response_t *llm_chat_stream(const char *user_input, const char *cwd,
         fprintf(stderr, "llmsh: curl error: %s\n", curl_easy_strerror(res));
         sse_state_cleanup(&sse);
         return NULL;
+    }
+
+    /* API debug: summary of what came back */
+    {
+        char dbg[256];
+        snprintf(dbg, sizeof(dbg), "text=%zuB, tool_calls=%d",
+                 sse.text_len, sse.num_tool_calls);
+        stream_api_output("←", dbg);
     }
 
     /* Build response from accumulated state */

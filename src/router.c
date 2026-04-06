@@ -6,6 +6,7 @@
 #include "builtin.h"
 #include "exec.h"
 #include "safety.h"
+#include "streams.h"
 #include "config.h"
 #include "cJSON.h"
 
@@ -144,6 +145,9 @@ char *router_dispatch(const tool_call_t *tc)
 {
     if (!tc || !tc->name)
         return strdup("error: invalid tool call");
+
+    /* Label the tool call */
+    stream_tool_call(tc->name, tc->arguments);
 
     /* Special case: run */
     if (strcmp(tc->name, "run") == 0)

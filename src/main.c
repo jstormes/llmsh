@@ -123,12 +123,24 @@ static int split_and_exec(const char *cmdline,
     return 0; /* fully executed */
 }
 
-/* SSE streaming callback: write each token to stdchat as it arrives */
+/* SSE streaming callbacks */
 static void chat_token_cb(const char *token, void *userdata)
 {
     (void)userdata;
     stream_chat_output(token);
 }
+
+static void think_token_cb(const char *token, void *userdata)
+{
+    (void)userdata;
+    stream_think_output(token);
+}
+
+static llm_stream_cbs g_stream_cbs = {
+    .on_token = chat_token_cb,
+    .on_thinking = think_token_cb,
+    .userdata = NULL
+};
 
 static void show_help(void)
 {
@@ -150,15 +162,17 @@ static void show_help(void)
         "  make clean && make\n"
         "\n"
         "Output streams:\n"
-        "  fd 1 (stdout)   Tool output (hidden by default, use -v to show)\n"
+        "  fd 1 (stdout)   Tool output (visible by default)\n"
         "  fd 2 (stderr)   Errors and confirmations\n"
         "  fd 3 (stdchat)  LLM responses (visible by default)\n"
         "\n"
         "  Redirect: llmsh 3>review.txt    Pipe: llmsh 3>&1 | less\n"
         "\n"
         "Flags:\n"
-        "  -v               Show tool output (verbose)\n"
-        "  -q               Hide tool output (default)\n"
+        "  -v               Show tool output (default)\n"
+        "  -q               Hide tool output\n"
+        "  -l               Labeled output: [chat] [stdout] [think] [tool]\n"
+        "  -d               Debug: labels + [api] request/response info\n"
         "  -h               Show this help\n"
         "\n"
         "Built-in tools (no confirmation needed):\n"
@@ -226,11 +240,13 @@ int main(int argc, char **argv)
 {
     /* Parse command line flags */
     int opt;
-    while ((opt = getopt(argc, argv, "vqh")) != -1) {
+    while ((opt = getopt(argc, argv, "vqldhH")) != -1) {
         switch (opt) {
         case 'v': streams_verbose = 1; break;
         case 'q': streams_verbose = 0; break;
-        case 'h':
+        case 'l': streams_label_mode = 1; break;
+        case 'd': streams_label_mode = 2; break;
+        case 'h': case 'H':
             streams_init();
             show_help();
             streams_cleanup();
@@ -328,7 +344,7 @@ int main(int argc, char **argv)
             history_add_user(full_query);
             llm_response_t *resp = llm_chat_stream(full_query, cwd, NULL,
                                              matched_cmds, first_word_is_cmd,
-                                             chat_token_cb, NULL);
+                                             &g_stream_cbs);
             free(full_query);
             free(query);
             free(matched_cmds);
@@ -361,7 +377,7 @@ int main(int argc, char **argv)
                 if (interrupted) break;
                 if (!getcwd(cwd, sizeof(cwd))) strcpy(cwd, ".");
                 resp = llm_chat_stream(NULL, cwd, last_output, NULL, 0,
-                                       chat_token_cb, NULL);
+                                       &g_stream_cbs);
             }
             if (resp && resp->text && resp->text[0]) {
                 stream_chat_output("\n"); /* text already streamed */
@@ -381,7 +397,7 @@ int main(int argc, char **argv)
         history_add_user(query);
         llm_response_t *resp = llm_chat_stream(query, cwd, NULL,
                                          matched_cmds, first_word_is_cmd,
-                                         chat_token_cb, NULL);
+                                         &g_stream_cbs);
         free(query);
         free(matched_cmds);
 
@@ -418,7 +434,7 @@ int main(int argc, char **argv)
             if (!getcwd(cwd, sizeof(cwd)))
                 strcpy(cwd, ".");
             resp = llm_chat_stream(NULL, cwd, last_output, NULL, 0,
-                                   chat_token_cb, NULL);
+                                   &g_stream_cbs);
         }
 
         /* Text was already streamed; just add trailing newline and save to history */
@@ -493,6 +509,24 @@ int main(int argc, char **argv)
             continue;
         }
 
+        if (strcmp(line, "/labels") == 0) {
+            streams_label_mode = streams_label_mode ? 0 : 1;
+            stream_chat_output(streams_label_mode
+                ? "Labels: on\n"
+                : "Labels: off\n");
+            free(line);
+            continue;
+        }
+
+        if (strcmp(line, "/debug") == 0) {
+            streams_label_mode = (streams_label_mode == 2) ? 0 : 2;
+            stream_chat_output(streams_label_mode == 2
+                ? "Debug mode: on (labels + API)\n"
+                : "Debug mode: off\n");
+            free(line);
+            continue;
+        }
+
         if (handle_server_cmd(line)) {
             free(line);
             continue;
@@ -538,7 +572,7 @@ int main(int argc, char **argv)
 
                 history_add_user(full_query);
                 llm_response_t *resp = llm_chat_stream(full_query, cwd, last_output,
-                                                 mc, fw, chat_token_cb, NULL);
+                                                 mc, fw, &g_stream_cbs);
                 free(full_query);
                 free(mc);
                 free(llm_prompt);
@@ -577,7 +611,7 @@ int main(int argc, char **argv)
                     if (interrupted) break;
                     if (!getcwd(cwd, sizeof(cwd))) strcpy(cwd, ".");
                     resp = llm_chat_stream(NULL, cwd, last_output, NULL, 0,
-                                           chat_token_cb, NULL);
+                                           &g_stream_cbs);
                 }
                 if (resp && resp->text && resp->text[0]) {
                     stream_chat_output("\n");
@@ -598,7 +632,7 @@ int main(int argc, char **argv)
         history_add_user(line);
         llm_response_t *resp = llm_chat_stream(line, cwd, last_output,
                                          matched_cmds, 0,
-                                         chat_token_cb, NULL);
+                                         &g_stream_cbs);
         free(line);
         free(matched_cmds);
 
@@ -648,7 +682,7 @@ int main(int argc, char **argv)
             if (!getcwd(cwd, sizeof(cwd)))
                 strcpy(cwd, ".");
             resp = llm_chat_stream(NULL, cwd, last_output, NULL, 0,
-                                   chat_token_cb, NULL);
+                                   &g_stream_cbs);
         }
 
         /* Final text already streamed; just add newline and save history */

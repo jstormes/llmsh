@@ -113,11 +113,12 @@ hide intermediate tool output for cleaner LLM-only responses (e.g., code review)
 ./llmsh -v         # verbose: same as default (explicit)
 ```
 
-**Runtime toggle:**
+**Runtime toggles:**
 
 ```
 default@~> /verbose    # toggle tool output on/off
-Tool output: visible
+default@~> /labels     # toggle stream labels on/off
+default@~> /debug      # toggle debug mode (labels + API info)
 ```
 
 **Redirecting streams:**
@@ -149,6 +150,44 @@ When the user asks "review the code in this directory":
 
 The tool results are always sent to the LLM for context regardless of whether
 they're displayed. Use `-v` or `/verbose` when you want to see what tools are doing.
+
+## Stream Labels
+
+Use `-l` or `/labels` to see labeled, color-coded output showing exactly what
+each stream is doing:
+
+```
+default@~> /labels
+Labels: on
+default@~> review the code
+[tool] ls({"path":"."})
+[stdout] src/main.c  src/llm.c  src/router.c
+[tool] cat({"path":"src/main.c"})
+[stdout] #include <stdio.h>...
+[think] Let me analyze the code structure and patterns...
+[chat] The code is well structured. Here's my analysis...
+```
+
+| Label | Color | Description |
+|-------|-------|-------------|
+| `[chat]` | Green | LLM response text |
+| `[stdout]` | Cyan | Tool execution output |
+| `[think]` | Magenta | LLM reasoning/thinking tokens |
+| `[tool]` | Yellow | Tool call name and arguments (before execution) |
+| `[api]` | Gray | API request/response info (debug mode only) |
+
+**Debug mode** (`-d` or `/debug`) adds API-level information:
+
+```
+[api→] http://ai:8080/v1/chat/completions
+[tool] ls({"path":"."})
+[stdout] src/main.c  src/llm.c
+[chat] Here are your files...
+[api←] text=142B, tool_calls=0
+```
+
+Thinking tokens are detected from multiple API formats:
+`reasoning_content` (OpenAI), `thinking` (Anthropic/llama.cpp), `reasoning`.
 
 ## SSE Streaming
 
@@ -263,6 +302,8 @@ Falls back to environment variables if no `~/.llmshrc` exists.
 | `/server <name>` | Switch to a different server |
 | `/clear` | Clear conversation history |
 | `/verbose` | Toggle tool output visibility |
+| `/labels` | Toggle stream labels on/off |
+| `/debug` | Toggle debug mode (labels + API info) |
 | `help` | Show usage help |
 | `exit`, `quit` | Exit the shell |
 
@@ -272,6 +313,8 @@ Falls back to environment variables if no `~/.llmshrc` exists.
 |------|-------------|
 | `-v` | Verbose: show tool output on stdout (default) |
 | `-q` | Quiet: hide tool output, show only LLM answers |
+| `-l` | Labels: prefix output with `[chat]`, `[stdout]`, `[think]`, `[tool]` |
+| `-d` | Debug: labels + `[api]` request/response info |
 | `-h` | Show help and exit |
 
 ## Environment Variables
