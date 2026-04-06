@@ -18,10 +18,11 @@
 #include "router.h"
 #include "shell.h"
 
-/* Globals shared with shell.c */
+/* Signal flag — must be global for signal handler. Extern'd by llm.c and shell.c */
 volatile sig_atomic_t interrupted = 0;
-server_config_t *g_servers = NULL;
-char *g_last_output = NULL;
+
+/* Shell context pointer for readline callback (can't pass userdata) */
+static shell_ctx_t *g_ctx = NULL;
 
 static void sigint_handler(int sig)
 {
@@ -53,11 +54,12 @@ static int shift_tab_handler(int count, int key)
 {
     (void)count;
     (void)key;
+    if (!g_ctx) return 0;
 
-    int next = (g_servers->active + 1) % g_servers->count;
-    g_servers->active = next;
+    int next = (g_ctx->servers->active + 1) % g_ctx->servers->count;
+    g_ctx->servers->active = next;
 
-    const server_entry_t *s = serverconf_active(g_servers);
+    const server_entry_t *s = serverconf_active(g_ctx->servers);
     llm_cleanup();
     if (llm_init(s->api_url, s->model, s->api_key) != 0) {
         fprintf(stderr, "\nllmsh: failed to connect to %s\n", s->name);
@@ -69,8 +71,8 @@ static int shift_tab_handler(int count, int key)
 
     history_cleanup();
     history_init();
-    free(g_last_output);
-    g_last_output = NULL;
+    free(g_ctx->last_output);
+    g_ctx->last_output = NULL;
 
     rl_on_new_line();
     rl_replace_line("", 0);
@@ -99,7 +101,6 @@ static char *read_piped_stdin(void)
     }
     if (buf) buf[len] = '\0';
 
-    /* Reopen /dev/tty as stdin for interactive prompts */
     FILE *tty = fopen("/dev/tty", "r");
     if (tty) {
         dup2(fileno(tty), STDIN_FILENO);
@@ -109,7 +110,6 @@ static char *read_piped_stdin(void)
     return buf;
 }
 
-/* Concatenate argv[start..argc-1] into a single string */
 static char *join_args(int argc, char **argv, int start)
 {
     size_t len = 0;
@@ -134,17 +134,19 @@ int main(int argc, char **argv)
         case 'q': streams_verbose = 0; break;
         case 'l': streams_label_mode = 1; break;
         case 'd': streams_label_mode = 2; break;
-        case 'h': case 'H':
+        case 'h': case 'H': {
+            shell_ctx_t help_ctx = {0};
             streams_init();
-            shell_handle_slash("help");
+            shell_handle_slash(&help_ctx, "help");
             streams_cleanup();
             return 0;
+        }
         }
     }
 
     /* Load config */
-    g_servers = serverconf_load();
-    const server_entry_t *active = serverconf_active(g_servers);
+    server_config_t *servers = serverconf_load();
+    const server_entry_t *active = serverconf_active(servers);
 
     /* Read piped stdin */
     char *piped_input = read_piped_stdin();
@@ -168,7 +170,16 @@ int main(int argc, char **argv)
     int ncmds = pathscan_init();
     int nman = manscan_init();
     builtin_init();
-    router_init(g_servers);
+    router_init(servers);
+
+    /* Create shell context */
+    shell_ctx_t ctx = {
+        .servers = servers,
+        .cbs = &g_stream_cbs,
+        .last_output = NULL,
+        .max_iterations = servers->max_iterations,
+    };
+    g_ctx = &ctx;  /* for readline callback */
 
     {
         char banner[512];
@@ -180,12 +191,10 @@ int main(int argc, char **argv)
         stream_chat_output(banner);
     }
 
-    int max_iter = g_servers->max_iterations;
-
     /* ── One-shot mode ──────────────────────────────────────────── */
     if (optind < argc) {
         char *query = join_args(argc, argv, optind);
-        char *result = shell_query(query, piped_input, max_iter, &g_stream_cbs);
+        char *result = shell_query(&ctx, query, piped_input);
         free(query);
         free(piped_input);
         free(result);
@@ -195,7 +204,7 @@ int main(int argc, char **argv)
     /* ── Interactive REPL ───────────────────────────────────────── */
     for (;;) {
         interrupted = 0;
-        active = serverconf_active(g_servers);
+        active = serverconf_active(ctx.servers);
 
         char cwd[4096];
         if (!getcwd(cwd, sizeof(cwd))) strcpy(cwd, ".");
@@ -211,30 +220,27 @@ int main(int argc, char **argv)
 
         add_history(line);
 
-        /* Slash commands */
-        if (shell_handle_slash(line)) { free(line); continue; }
+        if (shell_handle_slash(&ctx, line)) { free(line); continue; }
 
-        /* Check if first word is a known command */
         int first_word_is_cmd = 0;
         char *matched_cmds = pathscan_match_input(line, &first_word_is_cmd);
 
         if (first_word_is_cmd) {
             free(matched_cmds);
-            char *result = shell_execute(line, max_iter, &g_stream_cbs);
+            char *result = shell_execute(&ctx, line);
             free(result);
             free(line);
             continue;
         }
 
-        /* Pure natural language */
         free(matched_cmds);
-        char *result = shell_query(line, NULL, max_iter, &g_stream_cbs);
+        char *result = shell_query(&ctx, line, NULL);
         free(result);
         free(line);
     }
 
 cleanup:
-    free(g_last_output);
+    free(ctx.last_output);
     free(piped_input);
     write_history(histfile);
     history_cleanup();
@@ -242,6 +248,6 @@ cleanup:
     pathscan_cleanup();
     manscan_cleanup();
     streams_cleanup();
-    serverconf_free(g_servers);
+    serverconf_free(servers);
     return 0;
 }

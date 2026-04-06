@@ -14,10 +14,8 @@
 #include "serverconf.h"
 #include "exec.h"
 
-/* Defined in main.c, shared */
+/* interrupted stays global — signal handlers can't take context */
 extern volatile sig_atomic_t interrupted;
-extern server_config_t *g_servers;
-extern char *g_last_output;
 
 /* ── Helpers ─────────────────────────────────────────────────────── */
 
@@ -38,28 +36,31 @@ static void first_word(const char *s, char *out, size_t out_sz)
     out[i] = '\0';
 }
 
+/* Helper to update ctx->last_output */
+static void set_last_output(shell_ctx_t *ctx, char *output)
+{
+    free(ctx->last_output);
+    ctx->last_output = output;
+}
+
 /* ── Agentic loop ────────────────────────────────────────────────── */
 
-char *shell_agentic_loop(llm_response_t *resp, int max_iter,
-                          llm_stream_cbs *cbs)
+char *shell_agentic_loop(shell_ctx_t *ctx, llm_response_t *resp)
 {
     char cwd[4096];
     int iterations = 0;
     char *final_text = NULL;
 
     while (resp && resp->num_tool_calls > 0
-           && !interrupted && iterations < max_iter) {
+           && !interrupted && iterations < ctx->max_iterations) {
         iterations++;
 
-        /* Assistant text before tool calls */
         if (resp->text && resp->text[0]) {
             stream_chat_output("\n");
             history_add_assistant(resp->text);
         }
 
-        /* Execute tool calls */
-        free(g_last_output);
-        g_last_output = NULL;
+        set_last_output(ctx, NULL);
 
         for (int i = 0; i < resp->num_tool_calls && !interrupted; i++) {
             char *result = router_dispatch(&resp->tool_calls[i]);
@@ -68,8 +69,7 @@ char *shell_agentic_loop(llm_response_t *resp, int max_iter,
                 if (result[0] && result[strlen(result)-1] != '\n')
                     stream_tool_output("\n");
                 history_add_tool_result(resp->tool_calls[i].name, result);
-                free(g_last_output);
-                g_last_output = result;
+                set_last_output(ctx, result);
             }
         }
 
@@ -79,18 +79,17 @@ char *shell_agentic_loop(llm_response_t *resp, int max_iter,
         if (interrupted) break;
 
         if (!getcwd(cwd, sizeof(cwd))) strcpy(cwd, ".");
-        resp = llm_chat_stream(NULL, cwd, g_last_output, NULL, 0, cbs);
+        resp = llm_chat_stream(NULL, cwd, ctx->last_output, NULL, 0, ctx->cbs);
     }
 
-    /* Final text */
     if (resp && resp->text && resp->text[0]) {
         stream_chat_output("\n");
         history_add_assistant(resp->text);
         final_text = strdup(resp->text);
     }
 
-    if (iterations >= max_iter)
-        fprintf(stderr, "llmsh: max iterations reached (%d)\n", max_iter);
+    if (iterations >= ctx->max_iterations)
+        fprintf(stderr, "llmsh: max iterations reached (%d)\n", ctx->max_iterations);
 
     llm_response_free(resp);
     return final_text;
@@ -98,13 +97,11 @@ char *shell_agentic_loop(llm_response_t *resp, int max_iter,
 
 /* ── Query ───────────────────────────────────────────────────────── */
 
-char *shell_query(const char *query, const char *context,
-                  int max_iter, llm_stream_cbs *cbs)
+char *shell_query(shell_ctx_t *ctx, const char *query, const char *context)
 {
     char cwd[4096];
     if (!getcwd(cwd, sizeof(cwd))) strcpy(cwd, ".");
 
-    /* Build full query with optional context */
     char *full_query;
     if (context) {
         size_t len = strlen(query) + strlen(context) + 64;
@@ -121,8 +118,8 @@ char *shell_query(const char *query, const char *context,
 
     history_add_user(full_query);
     streams_llm_active = 1;
-    llm_response_t *resp = llm_chat_stream(full_query, cwd, g_last_output,
-                                            mc, fw, cbs);
+    llm_response_t *resp = llm_chat_stream(full_query, cwd, ctx->last_output,
+                                            mc, fw, ctx->cbs);
     free(full_query);
     free(mc);
 
@@ -132,18 +129,13 @@ char *shell_query(const char *query, const char *context,
         return NULL;
     }
 
-    char *result = shell_agentic_loop(resp, max_iter, cbs);
+    char *result = shell_agentic_loop(ctx, resp);
     streams_llm_active = 0;
     return result;
 }
 
 /* ── Split and execute ───────────────────────────────────────────── */
 
-/*
- * Split cmdline on '|'. Command segments run directly.
- * First non-command segment triggers LLM handoff.
- * Returns: 0 = fully executed, 1 = LLM needed
- */
 static int split_pipeline(const char *cmdline,
                            char **llm_prompt, char **pipe_context)
 {
@@ -161,7 +153,6 @@ static int split_pipeline(const char *cmdline,
         seg = strtok_r(NULL, "|", &saveptr);
     }
 
-    /* Find first non-command segment */
     int handoff = nseg;
     for (int i = 0; i < nseg; i++) {
         char word[256];
@@ -172,7 +163,6 @@ static int split_pipeline(const char *cmdline,
         }
     }
 
-    /* Execute command segments */
     char *cmd_output = NULL;
     if (handoff > 0) {
         const char *cmds[64];
@@ -182,7 +172,6 @@ static int split_pipeline(const char *cmdline,
     }
 
     if (handoff < nseg) {
-        /* Rejoin remaining as LLM prompt */
         size_t plen = 0;
         for (int i = handoff; i < nseg; i++)
             plen += strlen(segments[i]) + 3;
@@ -198,7 +187,6 @@ static int split_pipeline(const char *cmdline,
         return 1;
     }
 
-    /* All commands — show output */
     if (cmd_output) {
         stream_tool_output(cmd_output);
         if (cmd_output[0] && cmd_output[strlen(cmd_output)-1] != '\n')
@@ -209,10 +197,8 @@ static int split_pipeline(const char *cmdline,
     return 0;
 }
 
-char *shell_execute(const char *cmdline, int max_iter,
-                     llm_stream_cbs *cbs)
+char *shell_execute(shell_ctx_t *ctx, const char *cmdline)
 {
-    /* Handle cd specially */
     if (strncmp(cmdline, "cd", 2) == 0
         && (cmdline[2] == '\0' || cmdline[2] == ' ' || cmdline[2] == '\t')) {
         const char *path = cmdline + 2;
@@ -228,22 +214,20 @@ char *shell_execute(const char *cmdline, int max_iter,
     int needs_llm = split_pipeline(cmdline, &llm_prompt, &pipe_context);
 
     if (needs_llm && llm_prompt) {
-        char *result = shell_query(llm_prompt, pipe_context, max_iter, cbs);
+        char *result = shell_query(ctx, llm_prompt, pipe_context);
         free(llm_prompt);
         free(pipe_context);
         return result;
     }
 
-    /* Fully executed — update g_last_output */
-    free(g_last_output);
-    g_last_output = pipe_context;
+    set_last_output(ctx, pipe_context);
     free(llm_prompt);
     return NULL;
 }
 
 /* ── Slash commands ──────────────────────────────────────────────── */
 
-int shell_handle_slash(const char *line)
+int shell_handle_slash(shell_ctx_t *ctx, const char *line)
 {
     if (strcmp(line, "help") == 0 || strcmp(line, "/help") == 0) {
         stream_chat_output(
@@ -285,8 +269,7 @@ int shell_handle_slash(const char *line)
     if (strcmp(line, "/clear") == 0) {
         history_cleanup();
         history_init();
-        free(g_last_output);
-        g_last_output = NULL;
+        set_last_output(ctx, NULL);
         stream_chat_output("Conversation history cleared.\n");
         return 1;
     }
@@ -314,22 +297,21 @@ int shell_handle_slash(const char *line)
         return 1;
     }
 
-    /* /server command */
     if (strncmp(line, "/server", 7) == 0) {
         const char *arg = line + 7;
         while (*arg == ' ') arg++;
 
         if (*arg == '\0') {
-            serverconf_list(g_servers);
+            serverconf_list(ctx->servers);
             return 1;
         }
 
-        if (serverconf_switch(g_servers, arg) != 0) {
+        if (serverconf_switch(ctx->servers, arg) != 0) {
             fprintf(stderr, "llmsh: unknown server '%s'\n", arg);
             return 1;
         }
 
-        const server_entry_t *s = serverconf_active(g_servers);
+        const server_entry_t *s = serverconf_active(ctx->servers);
         llm_cleanup();
         if (llm_init(s->api_url, s->model, s->api_key) != 0) {
             fprintf(stderr, "llmsh: failed to connect to %s\n", s->name);
@@ -341,8 +323,7 @@ int shell_handle_slash(const char *line)
 
         history_cleanup();
         history_init();
-        free(g_last_output);
-        g_last_output = NULL;
+        set_last_output(ctx, NULL);
         return 1;
     }
 
