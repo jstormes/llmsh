@@ -8,7 +8,7 @@
 /* Global FILE* for chat output (fd 3) */
 extern FILE *stdchat;
 
-/* Whether tool output (fd 1) should be displayed. 0 = hidden (default), 1 = show */
+/* Whether tool output (fd 1) should be displayed. 1 = show (default), 0 = hidden */
 extern int streams_verbose;
 
 /* Initialize streams: set up fd 3 for chat output */

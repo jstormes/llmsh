@@ -7,7 +7,7 @@
 #include "streams.h"
 
 FILE *stdchat = NULL;
-int streams_verbose = 0;
+int streams_verbose = 1;
 
 void streams_init(void)
 {

@@ -32,8 +32,8 @@ make
 ### Interactive Mode
 
 ```bash
-./llmsh            # default: tool output hidden
-./llmsh -v         # verbose: tool output visible
+./llmsh            # tool output visible by default
+./llmsh -q         # quiet: hide tool output
 ```
 
 Both natural language and standard shell commands work:
@@ -45,6 +45,29 @@ default@/home/user> ls -la
 default@/home/user> grep -r TODO src/ | wc -l
 default@/home/user> gcc -o foo foo.c
 ```
+
+### Direct Execution
+
+When the first word of your input is a known command in `$PATH`, it runs
+directly without calling the LLM — just like a regular shell. This makes
+`ls`, `grep`, `git`, etc. instant.
+
+### Hybrid Pipelines
+
+The `|` pipe bridges the shell and the LLM. Command segments run directly;
+when a segment's first word is NOT a known command, it becomes a natural
+language prompt with the previous command output as context.
+
+```
+default@~> ls | show me the markdown files
+default@~> git log --oneline | summarize the recent changes
+default@~> cat main.c | grep TODO | explain these TODOs
+default@~> ps aux | which process is using the most memory
+default@~> df -h | am I running low on disk space
+```
+
+The rule: split on `|`, run commands left-to-right until a non-command
+segment is reached, then hand the accumulated output to the LLM as context.
 
 ### One-shot Mode
 
@@ -73,21 +96,21 @@ llmsh extends the Unix stream model with a fourth file descriptor for LLM output
 | fd | Name | Default | Purpose |
 |----|------|---------|---------|
 | 0 | stdin | terminal | User input / piped data as LLM context |
-| 1 | stdout | **hidden** | Tool execution output (ls, cat, grep results) |
+| 1 | stdout | terminal | Tool execution output (ls, cat, grep results) |
 | 2 | stderr | terminal | Errors and safety confirmation prompts |
 | 3 | stdchat | terminal | LLM conversational text (answers, summaries) |
 
-**Tool output is hidden by default.** When the LLM reads files or runs commands
-to answer your question, you only see the final answer — not the intermediate
-tool output. This keeps the terminal clean for multi-step tasks like code review.
+**Tool output is visible by default**, just like a regular shell. Use `-q` to
+hide intermediate tool output for cleaner LLM-only responses (e.g., code review).
 
 ### Controlling Output
 
 **CLI flags:**
 
 ```bash
-./llmsh -v         # verbose: show tool output on stdout
-./llmsh -q         # quiet: hide tool output (default)
+./llmsh            # tool output visible (default)
+./llmsh -q         # quiet: hide tool output, show only LLM answers
+./llmsh -v         # verbose: same as default (explicit)
 ```
 
 **Runtime toggle:**
@@ -247,8 +270,8 @@ Falls back to environment variables if no `~/.llmshrc` exists.
 
 | Flag | Description |
 |------|-------------|
-| `-v` | Verbose: show tool output on stdout |
-| `-q` | Quiet: hide tool output (default) |
+| `-v` | Verbose: show tool output on stdout (default) |
+| `-q` | Quiet: hide tool output, show only LLM answers |
 | `-h` | Show help and exit |
 
 ## Environment Variables

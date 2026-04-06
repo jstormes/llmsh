@@ -3,6 +3,7 @@
 #include <string.h>
 #include <signal.h>
 #include <unistd.h>
+#include <errno.h>
 #include <getopt.h>
 #include <readline/readline.h>
 #include <readline/history.h>
@@ -11,6 +12,7 @@
 #include "llm.h"
 #include "router.h"
 #include "builtin.h"
+#include "exec.h"
 #include "history.h"
 #include "serverconf.h"
 #include "pathscan.h"
@@ -23,6 +25,102 @@ static void sigint_handler(int sig)
 {
     (void)sig;
     interrupted = 1;
+}
+
+/* Trim leading/trailing whitespace from a string in place */
+static char *trim(char *s)
+{
+    while (*s == ' ' || *s == '\t') s++;
+    char *end = s + strlen(s) - 1;
+    while (end > s && (*end == ' ' || *end == '\t')) *end-- = '\0';
+    return s;
+}
+
+/* Get the first word from a string */
+static void first_word(const char *s, char *out, size_t out_sz)
+{
+    while (*s == ' ' || *s == '\t') s++;
+    size_t i = 0;
+    while (*s && *s != ' ' && *s != '\t' && i < out_sz - 1)
+        out[i++] = *s++;
+    out[i] = '\0';
+}
+
+/*
+ * Execute a command line, splitting on '|'. Command segments run directly.
+ * If a segment's first word is NOT a known command, it's treated as a
+ * natural language prompt — the pipeline output so far becomes LLM context.
+ *
+ * Returns: 0 = fully executed (no LLM needed)
+ *          1 = LLM handoff: *llm_prompt is set, *pipe_context has cmd output
+ */
+static int split_and_exec(const char *cmdline,
+                           char **llm_prompt, char **pipe_context)
+{
+    *llm_prompt = NULL;
+    *pipe_context = NULL;
+
+    char *copy = strdup(cmdline);
+    char *segments[64];
+    int nseg = 0;
+
+    /* Split on | */
+    char *saveptr = NULL;
+    char *seg = strtok_r(copy, "|", &saveptr);
+    while (seg && nseg < 64) {
+        segments[nseg++] = trim(seg);
+        seg = strtok_r(NULL, "|", &saveptr);
+    }
+
+    /* Find the first non-command segment (LLM handoff point) */
+    int handoff = nseg; /* default: no handoff, all commands */
+    for (int i = 0; i < nseg; i++) {
+        char word[256];
+        first_word(segments[i], word, sizeof(word));
+        if (!pathscan_lookup(word)) {
+            handoff = i;
+            break;
+        }
+    }
+
+    /* Execute command segments before the handoff */
+    char *cmd_output = NULL;
+    if (handoff > 0) {
+        const char *cmds[64];
+        for (int i = 0; i < handoff; i++)
+            cmds[i] = segments[i];
+        cmd_output = exec_pipeline(cmds, handoff, NULL, NULL, 0);
+    }
+
+    if (handoff < nseg) {
+        /* There's a natural language segment — hand off to LLM */
+        /* Rejoin remaining segments as the prompt */
+        size_t plen = 0;
+        for (int i = handoff; i < nseg; i++)
+            plen += strlen(segments[i]) + 3;
+        char *prompt = malloc(plen + 1);
+        prompt[0] = '\0';
+        for (int i = handoff; i < nseg; i++) {
+            if (i > handoff) strcat(prompt, " | ");
+            strcat(prompt, segments[i]);
+        }
+
+        *llm_prompt = prompt;
+        *pipe_context = cmd_output;
+        free(copy);
+        return 1; /* LLM needed */
+    }
+
+    /* All segments were commands — show output directly */
+    if (cmd_output) {
+        stream_tool_output(cmd_output);
+        if (cmd_output[0] && cmd_output[strlen(cmd_output)-1] != '\n')
+            stream_tool_output("\n");
+    }
+
+    *pipe_context = cmd_output;
+    free(copy);
+    return 0; /* fully executed */
 }
 
 /* SSE streaming callback: write each token to stdchat as it arrives */
@@ -400,14 +498,106 @@ int main(int argc, char **argv)
             continue;
         }
 
-        /* Match words in input against PATH commands */
+        /* Handle cd specially — must run in-process */
+        if (strncmp(line, "cd", 2) == 0
+            && (line[2] == '\0' || line[2] == ' ' || line[2] == '\t')) {
+            const char *path = line + 2;
+            while (*path == ' ' || *path == '\t') path++;
+            if (*path == '\0') path = getenv("HOME");
+            if (path && chdir(path) != 0)
+                fprintf(stderr, "cd: %s: %s\n", path, strerror(errno));
+            free(line);
+            continue;
+        }
+
+        /* Check if first word is a known command */
         int first_word_is_cmd = 0;
         char *matched_cmds = pathscan_match_input(line, &first_word_is_cmd);
 
-        /* Send to LLM with command hints */
+        if (first_word_is_cmd) {
+            free(matched_cmds);
+
+            /* Split pipeline: commands run directly, non-commands go to LLM */
+            char *llm_prompt = NULL;
+            char *pipe_context = NULL;
+            int needs_llm = split_and_exec(line, &llm_prompt, &pipe_context);
+
+            if (needs_llm && llm_prompt) {
+                /* Build LLM query with piped command output as context */
+                size_t qlen = strlen(llm_prompt) + (pipe_context ? strlen(pipe_context) : 0) + 64;
+                char *full_query = malloc(qlen);
+                if (pipe_context)
+                    snprintf(full_query, qlen,
+                             "[command output]:\n%s\n[user request]: %s",
+                             pipe_context, llm_prompt);
+                else
+                    snprintf(full_query, qlen, "%s", llm_prompt);
+
+                int fw = 0;
+                char *mc = pathscan_match_input(llm_prompt, &fw);
+
+                history_add_user(full_query);
+                llm_response_t *resp = llm_chat_stream(full_query, cwd, last_output,
+                                                 mc, fw, chat_token_cb, NULL);
+                free(full_query);
+                free(mc);
+                free(llm_prompt);
+                free(pipe_context);
+
+                if (!resp) {
+                    fprintf(stderr, "llmsh: LLM request failed\n");
+                    free(line);
+                    continue;
+                }
+
+                /* Run agentic loop for piped LLM query */
+                int max_iter = g_servers->max_iterations;
+                int iterations = 0;
+                while (resp && resp->num_tool_calls > 0
+                       && !interrupted && iterations < max_iter) {
+                    iterations++;
+                    if (resp->text && resp->text[0]) {
+                        stream_chat_output("\n");
+                        history_add_assistant(resp->text);
+                    }
+                    free(last_output);
+                    last_output = NULL;
+                    for (int i = 0; i < resp->num_tool_calls && !interrupted; i++) {
+                        char *result = router_dispatch(&resp->tool_calls[i]);
+                        if (result) {
+                            stream_tool_output(result);
+                            if (result[0] && result[strlen(result)-1] != '\n')
+                                stream_tool_output("\n");
+                            history_add_tool_result(resp->tool_calls[i].name, result);
+                            free(last_output);
+                            last_output = result;
+                        }
+                    }
+                    llm_response_free(resp);
+                    if (interrupted) break;
+                    if (!getcwd(cwd, sizeof(cwd))) strcpy(cwd, ".");
+                    resp = llm_chat_stream(NULL, cwd, last_output, NULL, 0,
+                                           chat_token_cb, NULL);
+                }
+                if (resp && resp->text && resp->text[0]) {
+                    stream_chat_output("\n");
+                    history_add_assistant(resp->text);
+                }
+                llm_response_free(resp);
+            } else {
+                /* Fully executed, update last_output */
+                free(last_output);
+                last_output = pipe_context;
+                free(llm_prompt);
+            }
+            free(line);
+            continue;
+        }
+
+        /* Pure natural language — send to LLM */
         history_add_user(line);
         llm_response_t *resp = llm_chat_stream(line, cwd, last_output,
-                                         matched_cmds, first_word_is_cmd,
+                                         matched_cmds, 0,
                                          chat_token_cb, NULL);
         free(line);
         free(matched_cmds);
