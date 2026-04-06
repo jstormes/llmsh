@@ -279,6 +279,35 @@ char *builtin_mkdir(const char *args_json)
     return strdup(msg);
 }
 
+/*
+ * Escape a string for safe use inside single quotes in a shell command.
+ * Replaces ' with '\'' (end quote, escaped quote, start quote).
+ * Caller frees returned string.
+ */
+static char *shell_escape(const char *s)
+{
+    /* Count single quotes */
+    size_t n = 0;
+    for (const char *p = s; *p; p++)
+        if (*p == '\'') n++;
+
+    if (n == 0) return strdup(s);
+
+    /* Each ' becomes '\'' (4 chars, replacing 1) */
+    size_t len = strlen(s) + n * 3 + 1;
+    char *out = malloc(len);
+    char *w = out;
+    for (const char *p = s; *p; p++) {
+        if (*p == '\'') {
+            *w++ = '\''; *w++ = '\\'; *w++ = '\''; *w++ = '\'';
+        } else {
+            *w++ = *p;
+        }
+    }
+    *w = '\0';
+    return out;
+}
+
 char *builtin_grep(const char *args_json)
 {
     /* Delegate to system grep via popen for simplicity */
@@ -295,12 +324,19 @@ char *builtin_grep(const char *args_json)
     cJSON *rec    = cJSON_GetObjectItem(args, "recursive");
     cJSON *icase  = cJSON_GetObjectItem(args, "ignore_case");
 
+    /* Escape pattern and path to prevent shell injection */
+    char *esc_pattern = shell_escape(pattern->valuestring);
+    const char *raw_path = (path && cJSON_IsString(path)) ? path->valuestring : ".";
+    char *esc_path = shell_escape(raw_path);
+
     char cmd[4096];
-    snprintf(cmd, sizeof(cmd), "grep %s %s -- '%s' %s 2>&1",
+    snprintf(cmd, sizeof(cmd), "grep %s %s -- '%s' '%s' 2>&1",
              (rec && cJSON_IsTrue(rec)) ? "-r" : "",
              (icase && cJSON_IsTrue(icase)) ? "-i" : "",
-             pattern->valuestring,
-             (path && cJSON_IsString(path)) ? path->valuestring : ".");
+             esc_pattern, esc_path);
+
+    free(esc_pattern);
+    free(esc_path);
 
     FILE *fp = popen(cmd, "r");
     if (!fp) {
