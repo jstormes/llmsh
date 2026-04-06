@@ -143,6 +143,37 @@ static llm_stream_cbs g_stream_cbs = {
     .userdata = NULL
 };
 
+/* Shift+Tab handler: cycle to next server */
+static int shift_tab_handler(int count, int key)
+{
+    (void)count;
+    (void)key;
+
+    /* Cycle to next server */
+    int next = (g_servers->active + 1) % g_servers->count;
+    g_servers->active = next;
+
+    const server_entry_t *s = serverconf_active(g_servers);
+    llm_cleanup();
+    if (llm_init(s->api_url, s->model, s->api_key) != 0) {
+        fprintf(stderr, "\nllmsh: failed to connect to %s\n", s->name);
+    }
+
+    /* Clear and redraw prompt with new server name */
+    char msg[256];
+    snprintf(msg, sizeof(msg), "\n→ %s (%s)\n", s->name, s->model);
+    stream_chat_output(msg);
+
+    /* Clear conversation history on switch */
+    history_cleanup();
+    history_init();
+
+    rl_on_new_line();
+    rl_replace_line("", 0);
+    rl_redisplay();
+    return 0;
+}
+
 static void show_help(void)
 {
     stream_chat_output(
@@ -175,6 +206,10 @@ static void show_help(void)
         "  -l               Labeled output: [chat] [stdout] [think] [tool]\n"
         "  -d               Debug: labels + [api] request/response info\n"
         "  -h               Show this help\n"
+        "\n"
+        "Keys:\n"
+        "  Shift+Tab        Cycle to next LLM server\n"
+        "  Up/Down          Recall history\n"
         "\n"
         "Built-in tools (no confirmation needed):\n"
         "  ls, cat, head, wc, grep, pwd, cd, read_file\n"
@@ -294,6 +329,9 @@ int main(int argc, char **argv)
              getenv("HOME") ? getenv("HOME") : ".");
     read_history(histfile);
 
+    /* Bind Shift+Tab to cycle servers */
+    rl_bind_keyseq("\\e[Z", shift_tab_handler);
+
     if (llm_init(active->api_url, active->model, active->api_key) != 0) {
         fprintf(stderr, "llmsh: failed to initialize LLM client\n");
         return 1;
@@ -310,7 +348,7 @@ int main(int argc, char **argv)
         snprintf(banner, sizeof(banner),
                  "llmsh - natural language shell\n"
                  "Server: %s (%s) | %d commands in PATH | %d man pages indexed\n"
-                 "Type natural language or shell commands. 'help' for usage. 'exit' to quit.\n\n",
+                 "Shift+Tab to cycle servers. 'help' for usage. 'exit' to quit.\n\n",
                  active->name, active->model, ncmds, nman);
         stream_chat_output(banner);
     }
@@ -488,7 +526,8 @@ int main(int argc, char **argv)
             continue;
         }
 
-        if (strcmp(line, "exit") == 0 || strcmp(line, "quit") == 0) {
+        if (strcmp(line, "exit") == 0 || strcmp(line, "quit") == 0
+            || strcmp(line, "/exit") == 0 || strcmp(line, "/quit") == 0) {
             free(line);
             break;
         }
