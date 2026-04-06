@@ -1,6 +1,6 @@
 CC      = gcc
 CFLAGS  = -Wall -Wextra -O2 -Iinclude -Ivendor
-LDFLAGS = -lcurl
+LDFLAGS = -lcurl -lreadline
 
 SRCS    = src/main.c src/llm.c src/router.c src/builtin.c src/exec.c \
           src/history.c src/safety.c src/json_helpers.c vendor/cJSON.c

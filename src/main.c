@@ -3,6 +3,8 @@
 #include <string.h>
 #include <signal.h>
 #include <unistd.h>
+#include <readline/readline.h>
+#include <readline/history.h>
 
 #include "config.h"
 #include "llm.h"
@@ -16,28 +18,6 @@ static void sigint_handler(int sig)
 {
     (void)sig;
     interrupted = 1;
-}
-
-static char *read_line(const char *prompt)
-{
-    char *buf = NULL;
-    size_t cap = 0;
-    ssize_t len;
-
-    fputs(prompt, stdout);
-    fflush(stdout);
-
-    len = getline(&buf, &cap, stdin);
-    if (len <= 0) {
-        free(buf);
-        return NULL;
-    }
-
-    /* Strip trailing newline */
-    if (buf[len - 1] == '\n')
-        buf[len - 1] = '\0';
-
-    return buf;
 }
 
 int main(int argc, char **argv)
@@ -56,6 +36,11 @@ int main(int argc, char **argv)
     signal(SIGINT, sigint_handler);
     builtin_init();
     history_init();
+
+    /* Readline history - load from file */
+    char histfile[4096];
+    snprintf(histfile, sizeof(histfile), "%s/.llmsh_history", getenv("HOME") ? getenv("HOME") : ".");
+    read_history(histfile);
 
     if (llm_init(api_url, model, api_key) != 0) {
         fprintf(stderr, "llmsh: failed to initialize LLM client\n");
@@ -77,7 +62,7 @@ int main(int argc, char **argv)
         char prompt[4200];
         snprintf(prompt, sizeof(prompt), "%s %s", cwd, LLMSH_PROMPT);
 
-        char *line = read_line(prompt);
+        char *line = readline(prompt);
         if (!line) {
             printf("\n");
             break;
@@ -92,6 +77,9 @@ int main(int argc, char **argv)
             free(line);
             break;
         }
+
+        /* Add to readline history */
+        add_history(line);
 
         /* Send to LLM */
         history_add_user(line);
@@ -134,6 +122,7 @@ int main(int argc, char **argv)
     }
 
     free(last_output);
+    write_history(histfile);
     history_cleanup();
     llm_cleanup();
 
