@@ -118,15 +118,21 @@ static char *build_system_prompt(const char *cwd, const char *last_output,
     if (last_output) sys_len += strlen(last_output);
     if (matched_cmds) sys_len += strlen(matched_cmds) + 256;
 
-    /* Get current date/time */
+    /* Get current date/time and user */
     time_t now = time(NULL);
     char timestr[64];
     strftime(timestr, sizeof(timestr), "%Y-%m-%d %H:%M:%S %Z", localtime(&now));
+    const char *user = getenv("USER");
+    if (!user) user = getenv("LOGNAME");
+    if (!user) user = "unknown";
+    const char *hostname = getenv("HOSTNAME");
+    if (!hostname) hostname = "";
 
     char *sys_buf = malloc(sys_len);
     int off = snprintf(sys_buf, sys_len,
-             "%s\n\nCurrent directory: %s\nCurrent time: %s\n",
-             SYSTEM_PROMPT, cwd, timestr);
+             "%s\n\nCurrent directory: %s\nCurrent time: %s\nUser: %s%s%s\n",
+             SYSTEM_PROMPT, cwd, timestr, user,
+             hostname[0] ? "@" : "", hostname);
 
     if (matched_cmds) {
         off += snprintf(sys_buf + off, sys_len - off,
