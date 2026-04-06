@@ -234,7 +234,31 @@ int main(int argc, char **argv)
         }
 
         free(matched_cmds);
-        char *result = shell_query(&ctx, line, NULL);
+
+        /* Check for output redirection: "review code > file.txt" */
+        char *outfile = NULL;
+        int append_mode = 0;
+        char *stripped = shell_parse_redirect(line, &outfile, &append_mode);
+        const char *query = stripped ? stripped : line;
+
+        char *result = shell_query(&ctx, query, NULL);
+
+        /* Write LLM result to file if redirected */
+        if (outfile && result) {
+            FILE *fp = fopen(outfile, append_mode ? "a" : "w");
+            if (fp) {
+                fputs(result, fp);
+                fclose(fp);
+                char msg[512];
+                snprintf(msg, sizeof(msg), "Wrote to %s\n", outfile);
+                stream_chat_output(msg);
+            } else {
+                fprintf(stderr, "llmsh: cannot write to %s\n", outfile);
+            }
+        }
+
+        free(outfile);
+        free(stripped);
         free(result);
         free(line);
     }

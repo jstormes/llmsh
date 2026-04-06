@@ -50,4 +50,13 @@ int shell_handle_slash(shell_ctx_t *ctx, const char *line);
  */
 int shell_is_exit(const char *line);
 
+/*
+ * Parse output redirection from end of input.
+ * Looks for " > file" or " >> file" at the end.
+ * If found, sets *outfile (malloced) and *append flag,
+ * returns a malloced copy of the input with the redirect stripped.
+ * If not found, returns NULL and leaves outfile/append unchanged.
+ */
+char *shell_parse_redirect(const char *input, char **outfile, int *append);
+
 #endif /* LLMSH_SHELL_H */

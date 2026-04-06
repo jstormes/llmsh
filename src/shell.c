@@ -335,3 +335,58 @@ int shell_is_exit(const char *line)
     return strcmp(line, "exit") == 0 || strcmp(line, "quit") == 0
         || strcmp(line, "/exit") == 0 || strcmp(line, "/quit") == 0;
 }
+
+char *shell_parse_redirect(const char *input, char **outfile, int *append)
+{
+    *outfile = NULL;
+    *append = 0;
+
+    /* Scan from end for > or >> not inside quotes */
+    const char *redir = NULL;
+    int in_sq = 0, in_dq = 0;
+    for (const char *p = input; *p; p++) {
+        if (*p == '\'' && !in_dq) in_sq = !in_sq;
+        else if (*p == '"' && !in_sq) in_dq = !in_dq;
+        else if (!in_sq && !in_dq && *p == '>') redir = p;
+    }
+
+    if (!redir) return NULL;
+
+    /* Check for >> (append) */
+    const char *start = redir;
+    if (start > input && *(start - 1) == '>') {
+        /* It's actually >> at start-1 */
+        /* But wait, we found the LAST >, so >> means start is second > */
+        /* Re-check: is there a > before this one? */
+    }
+    /* Simpler: check if >> */
+    if (redir > input && *(redir - 1) == '>') {
+        *append = 1;
+        start = redir - 1;
+    }
+
+    /* Extract filename after > or >> */
+    const char *fname = redir + 1;
+    while (*fname == ' ' || *fname == '\t') fname++;
+    if (*fname == '\0') return NULL; /* no filename */
+
+    /* Trim trailing whitespace from filename */
+    const char *fend = fname + strlen(fname) - 1;
+    while (fend > fname && (*fend == ' ' || *fend == '\t')) fend--;
+
+    size_t flen = fend - fname + 1;
+    *outfile = malloc(flen + 1);
+    memcpy(*outfile, fname, flen);
+    (*outfile)[flen] = '\0';
+
+    /* Return input with redirect stripped and trimmed */
+    size_t qlen = start - input;
+    while (qlen > 0 && (input[qlen-1] == ' ' || input[qlen-1] == '\t'))
+        qlen--;
+
+    char *query = malloc(qlen + 1);
+    memcpy(query, input, qlen);
+    query[qlen] = '\0';
+
+    return query;
+}

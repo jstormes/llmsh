@@ -1,0 +1,202 @@
+LLMSH CODE REVIEW & IMPROVEMENT SUGGESTIONS
+============================================
+
+1. SECURITY & SAFETY IMPROVEMENTS
+---------------------------------
+
+1.1 Command Safety List Issues
+- Problem: The `safe_commands` array includes commands like `git`, `npm`, `docker`, 
+  `python` that can execute destructive operations via subcommands.
+- Suggestion: Implement subcommand-level checking
+  - Whitelist specific safe subcommands (e.g., `git status`, `git log`)
+  - Block dangerous patterns (e.g., `git push --force`, `python -c "..."`)
+  - Add special handling for shell-spawning commands
+
+1.2 Buffer Overflow Risks
+- Problem: Complex `strncat` logic for building description strings
+- Suggestion: Replace with safer `snprintf` usage
+  ```c
+  int remaining = sizeof(desc) - strlen(desc) - 1;
+  if (remaining > 0) strncat(desc, cmds[i], remaining);
+  ```
+
+1.3 Path Traversal Protection
+- Problem: No validation of file paths in redirections
+- Suggestion: Add path normalization and validation for stdin_file/stdout_file
+
+2. BUG FIXES & ROBUSTNESS
+-------------------------
+
+2.1 Memory Safety Issues
+- Problem: `first_cmd_word` uses static buffer - not thread-safe
+- Suggestion: Pass buffer as parameter or use thread-local storage
+- Add bounds checking for very long commands
+
+2.2 Error Handling Gaps
+- Problem: Many functions don't check malloc/realloc return values
+- Suggestion: Add comprehensive error checking
+  ```c
+  char *buf = malloc(cap);
+  if (!buf) {
+      fprintf(stderr, "llmsh: memory allocation failed\n");
+      return strdup("error: out of memory");
+  }
+  ```
+
+2.3 Pipeline Parsing Issues
+- Problem: `split_pipeline` uses `strtok_r` which modifies input
+- Suggestion: Add validation for deeply nested pipelines and edge cases
+
+3. PERFORMANCE IMPROVEMENTS
+---------------------------
+
+3.1 Algorithm Optimization
+- Problem: `pipeline_is_safe` has O(n*m) complexity
+- Suggestion: Use hash table for O(n) lookup
+  ```c
+  static GHashTable *safe_cmd_table;
+  // Initialize once at startup
+  for (int i = 0; safe_commands[i]; i++)
+      g_hash_table_insert(safe_cmd_table, safe_commands[i], NULL);
+  ```
+
+3.2 String Operations
+- Problem: Repeated `strlen` calls in loops
+- Suggestion: Cache lengths or use more efficient string operations
+
+4. ARCHITECTURE & DESIGN
+------------------------
+
+4.1 Configuration Flexibility
+- Problem: Safe commands are hardcoded
+- Suggestion: Make safety list configurable via ~/.llmshrc
+  ```c
+  typedef struct {
+      char **safe_commands;
+      char **blocked_commands;
+      int require_confirmation_for_shells;
+  } safety_config_t;
+  ```
+
+4.2 Testing Infrastructure
+- Problem: No visible unit tests for critical functions
+- Suggestion: 
+  - Add tests for `pipeline_is_safe`
+  - Test edge cases: empty pipelines, long commands, special characters
+  - Add fuzzing for command parsing
+
+4.3 Logging & Debugging
+- Problem: Limited error context in production
+- Suggestion: Add structured logging with levels (debug, info, warn, error)
+
+5. CODE QUALITY
+---------------
+
+5.1 Documentation
+- Problem: Missing inline documentation for complex logic
+- Suggestion: Add Doxygen-style comments for:
+  - Safety decision logic
+  - Pipeline splitting algorithm
+  - Error handling strategies
+
+5.2 Code Style Consistency
+- Problem: Mixed naming conventions (`g_conf` vs `servers`)
+- Suggestion: Establish consistent naming guidelines
+
+5.3 Magic Numbers
+- Problem: Hardcoded buffer sizes (256, 2048, 4096)
+- Suggestion: Define as constants
+  ```c
+  #define MAX_CMD_NAME_LEN 256
+  #define MAX_DESC_LEN 2048
+  #define PATH_BUFFER_SIZE 4096
+  ```
+
+6. SPECIFIC CODE IMPROVEMENTS
+-----------------------------
+
+6.1 Enhanced first_cmd_word Function
+```c
+int first_cmd_word(const char *cmd, char *out, size_t out_sz) {
+    if (!out || out_sz == 0) return -1;
+    
+    while (*cmd == ' ' || *cmd == '\t') cmd++;
+    
+    size_t i = 0;
+    while (*cmd && *cmd != ' ' && *cmd != '\t' && i < out_sz - 1)
+        out[i++] = *cmd++;
+    out[i] = '\0';
+    
+    return (i > 0) ? 0 : -1;
+}
+```
+
+6.2 Subcommand-Aware Safety Checking
+```c
+static int is_command_safe(const char *cmd) {
+    const char *name = first_cmd_word(cmd);
+    
+    // Check for dangerous patterns
+    if (strstr(cmd, "rm -rf") || strstr(cmd, "dd if="))
+        return 0;
+    
+    if (strcmp(name, "git") == 0)
+        return is_git_safe(cmd);
+    // ... etc
+}
+```
+
+7. USER EXPERIENCE
+------------------
+
+7.1 Better Error Messages
+- Problem: Generic error messages
+- Suggestion: Provide actionable feedback
+  ```
+  Error: Command 'rm -rf /' blocked for safety
+  Reason: Destructive operation on root directory
+  Suggestion: Use 'rm -rf ./target_directory' instead
+  ```
+
+7.2 Interactive Confirmation
+- Problem: Simple yes/no confirmation
+- Suggestion: Show command diff, affected files, and provide options:
+  - Proceed
+  - Modify command
+  - Cancel
+
+8. MONITORING & OBSERVABILITY
+-----------------------------
+
+8.1 Metrics Collection
+- Add counters for:
+  - Commands blocked by safety
+  - Average pipeline length
+  - LLM response times
+  - Memory usage
+
+8.2 Audit Logging
+- Log all executed commands with:
+  - Timestamp
+  - User
+  - Working directory
+  - Command hash
+  - Result status
+
+PRIORITY RECOMMENDATIONS
+========================
+
+HIGH PRIORITY (Security):
+1. Implement subcommand-aware safety checking
+2. Add comprehensive error handling
+3. Fix buffer overflow risks
+
+MEDIUM PRIORITY (Robustness):
+4. Add unit tests for safety logic
+5. Improve error messages
+6. Make safety list configurable
+
+LOW PRIORITY (Polish):
+7. Add performance optimizations
+8. Improve documentation
+9. Add monitoring/metrics
