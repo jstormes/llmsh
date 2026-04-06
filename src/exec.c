@@ -9,7 +9,15 @@
 #include "exec.h"
 #include "config.h"
 
-/* Parse a command string into argv (simple space splitting, respects quotes) */
+/*
+ * Parse a command string into argv.
+ * Handles single/double quotes and backslash escapes:
+ *   "hello world"   → hello world
+ *   'hello world'   → hello world
+ *   hello\ world    → hello world
+ *   "say \"hi\""    → say "hi"
+ *   'it'\''s'       → it's
+ */
 static char **parse_argv(const char *cmd, int *argc_out)
 {
     int cap = 8, n = 0;
@@ -20,21 +28,42 @@ static char **parse_argv(const char *cmd, int *argc_out)
         while (*p == ' ' || *p == '\t') p++;
         if (!*p) break;
 
-        char quote = 0;
-        if (*p == '"' || *p == '\'') {
-            quote = *p++;
+        /* Build argument character by character */
+        size_t acap = 64, alen = 0;
+        char *arg = malloc(acap);
+
+        while (*p && (*p != ' ' && *p != '\t')) {
+            if (*p == '\\' && p[1]) {
+                /* Backslash escape outside quotes */
+                p++;
+                if (alen + 1 >= acap) { acap *= 2; arg = realloc(arg, acap); }
+                arg[alen++] = *p++;
+            } else if (*p == '"') {
+                /* Double-quoted string: backslash escapes \" and \\ */
+                p++;
+                while (*p && *p != '"') {
+                    if (*p == '\\' && (p[1] == '"' || p[1] == '\\')) {
+                        p++;
+                    }
+                    if (alen + 1 >= acap) { acap *= 2; arg = realloc(arg, acap); }
+                    arg[alen++] = *p++;
+                }
+                if (*p == '"') p++;
+            } else if (*p == '\'') {
+                /* Single-quoted string: no escapes, literal until closing ' */
+                p++;
+                while (*p && *p != '\'') {
+                    if (alen + 1 >= acap) { acap *= 2; arg = realloc(arg, acap); }
+                    arg[alen++] = *p++;
+                }
+                if (*p == '\'') p++;
+            } else {
+                if (alen + 1 >= acap) { acap *= 2; arg = realloc(arg, acap); }
+                arg[alen++] = *p++;
+            }
         }
 
-        const char *start = p;
-        while (*p && (quote ? *p != quote : (*p != ' ' && *p != '\t')))
-            p++;
-
-        size_t len = p - start;
-        char *arg = malloc(len + 1);
-        memcpy(arg, start, len);
-        arg[len] = '\0';
-
-        if (quote && *p == quote) p++;
+        arg[alen] = '\0';
 
         if (n + 1 >= cap) {
             cap *= 2;
