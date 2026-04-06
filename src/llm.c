@@ -13,6 +13,12 @@ static char *g_api_url = NULL;
 static char *g_model   = NULL;
 static char *g_api_key = NULL;
 
+/* Spinner state */
+static int g_spinner_active = 0;
+static int g_spinner_idx = 0;
+static const char *spinner_frames[] = {"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"};
+#define SPINNER_FRAMES 10
+
 /* Tools definition sent with every request */
 static const char *TOOLS_JSON =
 "["
@@ -59,6 +65,33 @@ static const char *SYSTEM_PROMPT =
     "- One-line command summaries are automatically included with 'run' results.\n"
     "- Use the 'man' tool when you need specific flags, options, or usage details.\n"
     "- Prefer 'man' over guessing flags — it returns accurate system documentation.";
+
+/* ── Spinner ─────────────────────────────────────────────────────── */
+
+static int curl_progress_cb(void *clientp, curl_off_t dltotal, curl_off_t dlnow,
+                             curl_off_t ultotal, curl_off_t ulnow)
+{
+    (void)clientp; (void)dltotal; (void)dlnow; (void)ultotal; (void)ulnow;
+    if (g_spinner_active) {
+        fprintf(stderr, "\r%s ", spinner_frames[g_spinner_idx % SPINNER_FRAMES]);
+        g_spinner_idx++;
+    }
+    return 0;
+}
+
+static void spinner_start(void)
+{
+    g_spinner_active = 1;
+    g_spinner_idx = 0;
+}
+
+static void spinner_stop(void)
+{
+    if (g_spinner_active) {
+        fprintf(stderr, "\r  \r"); /* clear spinner */
+        g_spinner_active = 0;
+    }
+}
 
 /* ── Shared helpers ──────────────────────────────────────────────── */
 
@@ -236,8 +269,12 @@ llm_response_t *llm_chat(const char *user_input, const char *cwd,
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_cb);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 120L);
+    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+    curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, curl_progress_cb);
 
+    spinner_start();
     CURLcode res = curl_easy_perform(curl);
+    spinner_stop();
     curl_slist_free_all(headers);
     curl_easy_cleanup(curl);
     free(body);
@@ -336,6 +373,7 @@ static void sse_process_data(sse_state_t *st, const char *data)
         /* Text content delta */
         cJSON *content = cJSON_GetObjectItem(delta, "content");
         if (content && cJSON_IsString(content) && content->valuestring[0]) {
+            spinner_stop(); /* first token arrived */
             const char *tok = content->valuestring;
             size_t toklen = strlen(tok);
             sse_append_text(st, tok, toklen);
@@ -479,8 +517,12 @@ llm_response_t *llm_chat_stream(const char *user_input, const char *cwd,
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_sse_write_cb);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &sse);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 300L); /* longer timeout for streaming */
+    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+    curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, curl_progress_cb);
 
+    spinner_start();
     CURLcode res = curl_easy_perform(curl);
+    spinner_stop();
     curl_slist_free_all(headers);
     curl_easy_cleanup(curl);
     free(body);
