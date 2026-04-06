@@ -13,6 +13,7 @@
 #include "streams.h"
 #include "serverconf.h"
 #include "exec.h"
+#include "cJSON.h"
 
 /* interrupted stays global — signal handlers can't take context */
 extern volatile sig_atomic_t interrupted;
@@ -68,6 +69,38 @@ char *shell_agentic_loop(shell_ctx_t *ctx, llm_response_t *resp)
 
         /* Execute each tool call and record results */
         for (int i = 0; i < resp->num_tool_calls && !interrupted; i++) {
+            /* Show brief status on stdchat so user knows what's happening */
+            const char *name = resp->tool_calls[i].name;
+            if (name) {
+                char status[512];
+                /* Parse a short summary from arguments */
+                const char *args = resp->tool_calls[i].arguments;
+                if (args && args[0]) {
+                    /* Extract first string value for a hint */
+                    cJSON *a = cJSON_Parse(args);
+                    const char *hint = NULL;
+                    if (a) {
+                        cJSON *child = a->child;
+                        while (child) {
+                            if (cJSON_IsString(child)) { hint = child->valuestring; break; }
+                            if (cJSON_IsArray(child)) {
+                                cJSON *first = cJSON_GetArrayItem(child, 0);
+                                if (first && cJSON_IsString(first)) { hint = first->valuestring; break; }
+                            }
+                            child = child->next;
+                        }
+                        snprintf(status, sizeof(status), "  → %s %s\n",
+                                 name, hint ? hint : "");
+                        cJSON_Delete(a);
+                    } else {
+                        snprintf(status, sizeof(status), "  → %s\n", name);
+                    }
+                } else {
+                    snprintf(status, sizeof(status), "  → %s\n", name);
+                }
+                fprintf(stderr, "\033[90m%s\033[0m", status);
+            }
+
             char *result = router_dispatch(&resp->tool_calls[i]);
             if (result) {
                 stream_tool_output(result);
