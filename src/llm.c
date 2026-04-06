@@ -32,19 +32,27 @@ static const char *TOOLS_JSON =
 "]";
 
 static const char *SYSTEM_PROMPT =
-    "You are llmsh, a natural language Unix shell. The user speaks in English "
-    "and you translate their intent into tool calls. You have built-in tools "
-    "for common file operations (ls, cat, cp, mv, rm, mkdir, grep, head, wc, "
-    "read_file, write_file, cd, pwd) and a 'run' tool for arbitrary shell "
-    "command pipelines with piping and redirection.\n\n"
+    "You are llmsh, a natural language Unix shell. The user can type either "
+    "plain English OR standard shell commands. You must determine which:\n\n"
+    "1. DIRECT COMMAND: If the input looks like a standard shell command "
+    "(starts with a known command name, has flags like -la, pipes |, "
+    "redirections >, etc.), execute it directly via the 'run' tool exactly "
+    "as typed. Do not modify or interpret it. Pass the entire command line "
+    "as a single pipeline entry, splitting only on pipes (|).\n\n"
+    "2. NATURAL LANGUAGE: If the input is English describing what the user "
+    "wants, translate their intent into the appropriate tool calls.\n\n"
+    "3. AMBIGUOUS: If you cannot tell whether input is a command or English "
+    "(e.g., a single word like 'make' could be the build tool or a request), "
+    "ask the user to clarify.\n\n"
+    "You have built-in tools for common file operations (ls, cat, cp, mv, rm, "
+    "mkdir, grep, head, wc, read_file, write_file, cd, pwd) and a 'run' tool "
+    "for arbitrary shell command pipelines.\n\n"
     "Rules:\n"
-    "- Prefer built-in tools over 'run' when possible.\n"
+    "- Prefer built-in tools over 'run' when possible for natural language.\n"
+    "- For direct commands, always use 'run' to preserve exact behavior.\n"
     "- Use 'run' with pipeline array for pipes: [\"grep -r TODO\", \"wc -l\"].\n"
     "- Be concise in text responses. Show results, not explanations.\n"
-    "- For destructive operations, use the appropriate tool and the safety "
-    "system will handle confirmation.\n"
-    "- The user's current working directory and last command output are "
-    "provided as context.";
+    "- For destructive operations, the safety system will handle confirmation.";
 
 /* curl write callback */
 struct curl_buf {
@@ -83,21 +91,40 @@ void llm_cleanup(void)
 }
 
 llm_response_t *llm_chat(const char *user_input, const char *cwd,
-                          const char *last_output)
+                          const char *last_output,
+                          const char *matched_cmds, int first_word_is_cmd)
 {
     (void)user_input; /* already in history */
 
     /* Build context-aware system prompt */
-    char sys_buf[8192];
-    snprintf(sys_buf, sizeof(sys_buf),
-             "%s\n\nCurrent directory: %s\n%s%s%s",
-             SYSTEM_PROMPT, cwd,
-             last_output ? "Last command output (truncated):\n" : "",
-             last_output ? last_output : "",
-             last_output ? "\n" : "");
+    size_t sys_len = strlen(SYSTEM_PROMPT) + strlen(cwd) + 512;
+    if (last_output) sys_len += strlen(last_output);
+    if (matched_cmds) sys_len += strlen(matched_cmds) + 256;
+
+    char *sys_buf = malloc(sys_len);
+    int off = snprintf(sys_buf, sys_len,
+             "%s\n\nCurrent directory: %s\n",
+             SYSTEM_PROMPT, cwd);
+
+    if (matched_cmds) {
+        off += snprintf(sys_buf + off, sys_len - off,
+                 "\nThe following words in the user's input match installed "
+                 "system commands: %s\n", matched_cmds);
+        if (first_word_is_cmd) {
+            off += snprintf(sys_buf + off, sys_len - off,
+                     "NOTE: The FIRST word is a known command — this is very "
+                     "likely a direct shell command. Execute it via 'run'.\n");
+        }
+    }
+
+    if (last_output) {
+        snprintf(sys_buf + off, sys_len - off,
+                 "\nLast command output (truncated):\n%s\n", last_output);
+    }
 
     /* Build messages array using history */
     char *messages_json = history_build_messages(sys_buf);
+    free(sys_buf);
     if (!messages_json)
         return NULL;
 

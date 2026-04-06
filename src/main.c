@@ -12,6 +12,7 @@
 #include "builtin.h"
 #include "history.h"
 #include "serverconf.h"
+#include "pathscan.h"
 
 static volatile sig_atomic_t interrupted = 0;
 static server_config_t *g_servers = NULL;
@@ -27,15 +28,19 @@ static void show_help(void)
     printf(
         "llmsh - natural language shell\n"
         "\n"
-        "Type plain English to interact with your system. The LLM translates\n"
-        "your intent into file operations and shell commands.\n"
+        "Type plain English OR standard shell commands. llmsh understands both.\n"
         "\n"
-        "Examples:\n"
+        "Natural language examples:\n"
         "  show me what's in this directory\n"
         "  find all .c files larger than 10k\n"
         "  count the lines of code in src/\n"
-        "  make a backup of config.yaml\n"
         "  search for TODO comments in the project\n"
+        "\n"
+        "Direct shell commands also work:\n"
+        "  ls -la\n"
+        "  gcc -o foo foo.c\n"
+        "  grep -r TODO src/ | wc -l\n"
+        "  make clean && make\n"
         "\n"
         "Built-in tools (no confirmation needed):\n"
         "  ls, cat, head, wc, grep, pwd, cd, read_file\n"
@@ -120,9 +125,12 @@ int main(int argc, char **argv)
         return 1;
     }
 
+    /* Build PATH command hash table */
+    int ncmds = pathscan_init();
+
     printf("llmsh - natural language shell\n");
-    printf("Server: %s (%s)\n", active->name, active->model);
-    printf("Type natural language commands. /server to list/switch. 'exit' to quit.\n\n");
+    printf("Server: %s (%s) | %d commands in PATH\n", active->name, active->model, ncmds);
+    printf("Type natural language or shell commands. 'help' for usage. 'exit' to quit.\n\n");
 
     char cwd[4096];
     char *last_output = NULL;
@@ -177,10 +185,16 @@ int main(int argc, char **argv)
             continue;
         }
 
-        /* Send to LLM */
+        /* Match words in input against PATH commands */
+        int first_word_is_cmd = 0;
+        char *matched_cmds = pathscan_match_input(line, &first_word_is_cmd);
+
+        /* Send to LLM with command hints */
         history_add_user(line);
-        llm_response_t *resp = llm_chat(line, cwd, last_output);
+        llm_response_t *resp = llm_chat(line, cwd, last_output,
+                                         matched_cmds, first_word_is_cmd);
         free(line);
+        free(matched_cmds);
 
         if (!resp) {
             fprintf(stderr, "llmsh: LLM request failed\n");
@@ -221,6 +235,7 @@ int main(int argc, char **argv)
     write_history(histfile);
     history_cleanup();
     llm_cleanup();
+    pathscan_cleanup();
     serverconf_free(g_servers);
 
     return 0;

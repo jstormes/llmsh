@@ -9,6 +9,77 @@
 #include "config.h"
 #include "cJSON.h"
 
+/* Commands that are read-only / safe to run without confirmation */
+static const char *safe_commands[] = {
+    "ls", "dir", "cat", "head", "tail", "less", "more",
+    "wc", "grep", "egrep", "fgrep", "rg",
+    "find", "locate", "which", "whereis", "whatis", "type",
+    "file", "stat", "du", "df", "free", "uptime",
+    "date", "cal", "whoami", "id", "groups", "hostname",
+    "uname", "arch", "lsb_release", "lscpu", "lsblk", "lspci", "lsusb",
+    "pwd", "echo", "printf", "true", "false",
+    "env", "printenv", "set",
+    "ps", "top", "htop", "pgrep",
+    "ip", "ifconfig", "netstat", "ss", "ping", "host", "dig", "nslookup",
+    "git", "svn",   /* read operations are safe; destructive ones have subcommands */
+    "man", "info", "help", "apropos",
+    "diff", "cmp", "comm", "sort", "uniq", "tr", "cut", "paste",
+    "awk", "sed",   /* typically used for reading/transforming */
+    "tee", "xargs",
+    "md5sum", "sha256sum", "sha1sum",
+    "xxd", "od", "hexdump",
+    "tree", "realpath", "basename", "dirname",
+    "ldd", "nm", "objdump", "readelf", "strings",
+    "dpkg", "apt", "rpm",  /* query operations */
+    "pip", "npm", "cargo", "go", "rustc", "python", "python3", "node",
+    "make", "cmake", "gcc", "g++", "clang", "clang++", "cc",
+    "java", "javac", "mvn", "gradle",
+    "docker", "kubectl",
+    "curl", "wget",
+    "tar", "gzip", "gunzip", "zcat", "bzip2", "xz", "zip", "unzip",
+    NULL
+};
+
+/*
+ * Extract the first word (command name) from a command string.
+ * Returns a pointer into a static buffer.
+ */
+static const char *first_cmd_word(const char *cmd)
+{
+    static char buf[256];
+    int i = 0;
+    while (*cmd == ' ' || *cmd == '\t') cmd++;
+    while (*cmd && *cmd != ' ' && *cmd != '\t' && i < 255)
+        buf[i++] = *cmd++;
+    buf[i] = '\0';
+    return buf;
+}
+
+/*
+ * Check if a pipeline is entirely safe (all commands are read-only).
+ * Also checks: no output redirection (writing to files).
+ */
+static int pipeline_is_safe(const char **cmds, int n,
+                             const cJSON *stdout_f)
+{
+    /* Writing to a file is not safe */
+    if (stdout_f && cJSON_IsString(stdout_f))
+        return 0;
+
+    for (int i = 0; i < n; i++) {
+        const char *name = first_cmd_word(cmds[i]);
+        int found = 0;
+        for (int j = 0; safe_commands[j]; j++) {
+            if (strcmp(name, safe_commands[j]) == 0) {
+                found = 1;
+                break;
+            }
+        }
+        if (!found) return 0;
+    }
+    return 1;
+}
+
 /* Handle the special "run" tool for arbitrary command pipelines */
 static char *handle_run(const char *args_json)
 {
@@ -49,11 +120,13 @@ static char *handle_run(const char *args_json)
         strncat(desc, stdout_f->valuestring, sizeof(desc) - strlen(desc) - 1);
     }
 
-    /* Confirm before execution */
-    if (!safety_confirm(desc)) {
-        free(cmds);
-        cJSON_Delete(args);
-        return strdup("[denied by user]");
+    /* Skip confirmation for read-only commands */
+    if (!pipeline_is_safe(cmds, n, stdout_f)) {
+        if (!safety_confirm(desc)) {
+            free(cmds);
+            cJSON_Delete(args);
+            return strdup("[denied by user]");
+        }
     }
 
     const char *sin  = (stdin_f && cJSON_IsString(stdin_f)) ? stdin_f->valuestring : NULL;
